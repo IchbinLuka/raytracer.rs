@@ -1,3 +1,10 @@
+// ---------------------- Constants ---------------------- //
+
+const PI: f32 = 3.1415926535897932385;
+
+const SAMPLE_COUNT: u32 = 10u;
+
+// ---------------------- Bindings ------------------------ //
 
 @group(0)
 @binding(0)
@@ -19,115 +26,31 @@ struct InputBuffer {
     spheres: array<Sphere>,
 }
 
-struct Ray {
-    pos: vec3<f32>,
-    dir: vec3<f32>,  
+struct IntersectionResult {
+    hit: bool,
+    record: HitRecord,
 }
 
-const PI: f32 = 3.1415926535897932385;
-
-const SAMPLE_COUNT: u32 = 10u;
-
-
-struct Sphere {
-    center: vec3<f32>,
-    radius: f32,
+struct HitRecord {
+    t: f32,
+    point: vec3<f32>,
+    normal: vec3<f32>,
+    front_face: bool,
 }
 
-struct Ground {
-    center: vec3<f32>,
-    width: f32,
-    height: f32,
-}
+// ---------------------- Utility ------------------------ //
 
-struct Interval {
-    min: f32,
-    max: f32,
-}
-
-fn interval_contains(interval: Interval, x: f32) -> bool {
-    return interval.min <= x && x <= interval.max;
-}
-
-fn interval_clamp(interval: Interval, x: f32) -> f32 {
-    return clamp(x, interval.min, interval.max);
-}
-
-struct World {
-    spheres: array<Sphere>,
-}
-
-// var<storage> grounds = array<Ground>(
-//     Ground(vec3<f32>(0.0, -100.5, -1.0), 200.0, 200.0),
-// );
-
-// var<storage> spheres = array<Sphere>(
-//     Sphere(vec3<f32>(0.0, 0.0, -1.0), 0.5),
-// );
-
-// var<storage> world: World = World(
-//     array<Sphere>(
-//         Sphere(vec3<f32>(0.0, 0.0, -1.0), 0.5),
-//     ), 
-//     array<Ground>(
-//         Ground(vec3<f32>(0.0, -100.5, -1.0), 200.0, 200.0),
-//     )
-// );
-
-// var<storage> test_sphere: Sphere = Sphere(vec3<f32>(0.0, 0.0, -1.0), 0.5);
-
-
-//--------------------------------- Random number generator ----------------------------------------------------//
-// https://indico.cern.ch/event/93877/contributions/2118070/attachments/1104200/1575343/acat3_revised_final.pdf //
-//--------------------------------------------------------------------------------------------------------------//
-
-var<private> z1: u32 = 123456789u;
-var<private> z2: u32 = 362436069u;
-var<private> z3: u32 = 521288629u;
-var<private> z4: u32 = 88675123u;
-
-fn hybrid_taus() -> f32 {
-    return 2.3283064365387e-10 * f32(
-        taus_step(&z1, 13u, 19u, 12u, 4294967294u) ^
-        taus_step(&z2, 2u, 25u, 4u, 4294967288u) ^
-        taus_step(&z3, 3u, 11u, 17u, 4294967280u) ^
-        lcg_step(&z4, 1664525u, 1013904223u)
-    );
-}
-
-fn init_hybrid_taus(id: vec3<u32>) {
-    z1 = seed(id.x);
-    z2 = seed(id.y);
-    z3 = seed(id.z);
-    z4 = seed(id.x + id.y + id.z);
-}
-
-
-fn taus_step(z: ptr<private, u32>, s1: u32, s2: u32, s3: u32, m: u32) -> u32 {
-    let b = (((*z << s1) ^ *z) >> s2);
-    *z = (((*z & m) << s3) ^ b);
-    return *z;
-}
-
-fn lcg_step(z: ptr<private, u32>, a: u32, c: u32) -> u32 {
-    *z = (a * *z + c);
-    return *z;
-}
-
-
-fn seed(id: u32) -> u32 {
-    return id * 1099087573u;
-}
-
-// ------------------------------------------------------------------------------
-
-fn ray_pos_at(t: f32, ray: Ray) -> vec3<f32> {
-    return ray.pos + ray.dir * t;
+fn hit_record_set_face_normal(record: ptr<function, HitRecord>, ray: Ray, outward_normal: vec3<f32>) {
+    let front_face = dot(ray.dir, outward_normal) < 0.0;
+    let normal = select(-outward_normal, outward_normal, front_face);
+    (*record).front_face = front_face;
+    (*record).normal = normal;
 }
 
 fn unit_vector(v: vec3<f32>) -> vec3<f32> {
     return v / length(v);
 }
+
 
 fn world_hit(ray: Ray, interval: Interval) -> IntersectionResult {
     var result: IntersectionResult;
@@ -174,23 +97,22 @@ fn ray_color(ray: Ray) -> vec3<f32> {
     return (1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0);
 }
 
-struct IntersectionResult {
-    hit: bool,
-    record: HitRecord,
+// ---------------------- Ray ----------------------------- //
+
+struct Ray {
+    pos: vec3<f32>,
+    dir: vec3<f32>,  
 }
 
-struct HitRecord {
-    t: f32,
-    point: vec3<f32>,
-    normal: vec3<f32>,
-    front_face: bool,
+fn ray_pos_at(t: f32, ray: Ray) -> vec3<f32> {
+    return ray.pos + ray.dir * t;
 }
 
-fn hit_record_set_face_normal(record: ptr<function, HitRecord>, ray: Ray, outward_normal: vec3<f32>) {
-    let front_face = dot(ray.dir, outward_normal) < 0.0;
-    let normal = select(-outward_normal, outward_normal, front_face);
-    (*record).front_face = front_face;
-    (*record).normal = normal;
+// ------------------------------------- Shapes ------------------------------------------- //
+
+struct Sphere {
+    center: vec3<f32>,
+    radius: f32,
 }
 
 fn sphere_intersection(sphere: Sphere, ray: Ray, interval: Interval) -> IntersectionResult {
@@ -228,10 +150,18 @@ fn sphere_intersection(sphere: Sphere, ray: Ray, interval: Interval) -> Intersec
     let outward_normal = (record.point - sphere.center) / sphere.radius;
     hit_record_set_face_normal(&record, ray, outward_normal);
     result.record = record;
-    // result.record.normal = (result.record.point - sphere.center) / sphere.radius;
 
     return result;
 }
+
+
+
+struct Ground {
+    center: vec3<f32>,
+    width: f32,
+    height: f32,
+}
+
 
 fn ground_intersection(ground: Ground, ray: Ray, interval: Interval) -> IntersectionResult {
     var result: IntersectionResult;
@@ -256,20 +186,68 @@ fn ground_intersection(ground: Ground, ray: Ray, interval: Interval) -> Intersec
     return result;
 }
 
-fn hit_sphere(sphere: Sphere, ray: Ray) -> f32 {
-    let oc = ray.pos - sphere.center;
+// ------------------------------- Interval ------------------------------ //
 
-    let a = dot(ray.dir, ray.dir);
-    let h = dot(oc, ray.dir); // b / 2
-    let c = dot(oc, oc) - sphere.radius * sphere.radius;
-    let discriminant = h * h - a * c;
-
-    if (discriminant < 0.0) {
-        return -1.0;
-    } else {
-        return (-h - sqrt(discriminant)) / a;
-    }
+struct Interval {
+    min: f32,
+    max: f32,
 }
+
+fn interval_contains(interval: Interval, x: f32) -> bool {
+    return interval.min <= x && x <= interval.max;
+}
+
+fn interval_clamp(interval: Interval, x: f32) -> f32 {
+    return clamp(x, interval.min, interval.max);
+}
+
+// --------------------------------------------------------- //
+
+
+
+//--------------------------------- Random number generator ----------------------------------------------------//
+// https://indico.cern.ch/event/93877/contributions/2118070/attachments/1104200/1575343/acat3_revised_final.pdf //
+//--------------------------------------------------------------------------------------------------------------//
+
+var<private> z1: u32 = 123456789u;
+var<private> z2: u32 = 362436069u;
+var<private> z3: u32 = 521288629u;
+var<private> z4: u32 = 88675123u;
+
+fn hybrid_taus() -> f32 {
+    return 2.3283064365387e-10 * f32(
+        taus_step(&z1, 13u, 19u, 12u, 4294967294u) ^
+        taus_step(&z2, 2u, 25u, 4u, 4294967288u) ^
+        taus_step(&z3, 3u, 11u, 17u, 4294967280u) ^
+        lcg_step(&z4, 1664525u, 1013904223u)
+    );
+}
+
+fn init_hybrid_taus(id: vec3<u32>) {
+    z1 = seed(id.x);
+    z2 = seed(id.y);
+    z3 = seed(id.z);
+    z4 = seed(id.x + id.y + id.z);
+}
+
+
+fn taus_step(z: ptr<private, u32>, s1: u32, s2: u32, s3: u32, m: u32) -> u32 {
+    let b = (((*z << s1) ^ *z) >> s2);
+    *z = (((*z & m) << s3) ^ b);
+    return *z;
+}
+
+fn lcg_step(z: ptr<private, u32>, a: u32, c: u32) -> u32 {
+    *z = (a * *z + c);
+    return *z;
+}
+
+
+fn seed(id: u32) -> u32 {
+    return id * 1099087573u;
+}
+
+// ------------------------------------------------------------------------------ //
 
 
 @compute
