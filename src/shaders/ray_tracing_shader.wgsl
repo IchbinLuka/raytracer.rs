@@ -26,6 +26,8 @@ struct Ray {
 
 const PI: f32 = 3.1415926535897932385;
 
+const SAMPLE_COUNT: u32 = 10u;
+
 
 struct Sphere {
     center: vec3<f32>,
@@ -41,6 +43,14 @@ struct Ground {
 struct Interval {
     min: f32,
     max: f32,
+}
+
+fn interval_contains(interval: Interval, x: f32) -> bool {
+    return interval.min <= x && x <= interval.max;
+}
+
+fn interval_clamp(interval: Interval, x: f32) -> f32 {
+    return clamp(x, interval.min, interval.max);
 }
 
 struct World {
@@ -67,6 +77,49 @@ struct World {
 // var<storage> test_sphere: Sphere = Sphere(vec3<f32>(0.0, 0.0, -1.0), 0.5);
 
 
+//--------------------------------- Random number generator ----------------------------------------------------//
+// https://indico.cern.ch/event/93877/contributions/2118070/attachments/1104200/1575343/acat3_revised_final.pdf //
+//--------------------------------------------------------------------------------------------------------------//
+
+var<private> z1: u32 = 123456789u;
+var<private> z2: u32 = 362436069u;
+var<private> z3: u32 = 521288629u;
+var<private> z4: u32 = 88675123u;
+
+fn hybrid_taus() -> f32 {
+    return 2.3283064365387e-10 * f32(
+        taus_step(&z1, 13u, 19u, 12u, 4294967294u) ^
+        taus_step(&z2, 2u, 25u, 4u, 4294967288u) ^
+        taus_step(&z3, 3u, 11u, 17u, 4294967280u) ^
+        lcg_step(&z4, 1664525u, 1013904223u)
+    );
+}
+
+fn init_hybrid_taus(id: vec3<u32>) {
+    z1 = seed(id.x);
+    z2 = seed(id.y);
+    z3 = seed(id.z);
+    z4 = seed(id.x + id.y + id.z);
+}
+
+
+fn taus_step(z: ptr<private, u32>, s1: u32, s2: u32, s3: u32, m: u32) -> u32 {
+    let b = (((*z << s1) ^ *z) >> s2);
+    *z = (((*z & m) << s3) ^ b);
+    return *z;
+}
+
+fn lcg_step(z: ptr<private, u32>, a: u32, c: u32) -> u32 {
+    *z = (a * *z + c);
+    return *z;
+}
+
+
+fn seed(id: u32) -> u32 {
+    return id * 1099087573u;
+}
+
+// ------------------------------------------------------------------------------
 
 fn ray_pos_at(t: f32, ray: Ray) -> vec3<f32> {
     return ray.pos + ray.dir * t;
@@ -81,25 +134,29 @@ fn world_hit(ray: Ray, interval: Interval) -> IntersectionResult {
     result.hit = false;
     result.record.t = interval.max;
     var in: Interval = interval;
+    var t_max: f32 = interval.max;
 
     // let test = array<IntersectionResult, total_item_count>();
 
     for (var i: u32 = 0u; i < arrayLength(&spheres); i++) {
         let sphere = spheres[i];
-        let intersection = sphere_intersection(sphere, ray, in);
+        var intersection = sphere_intersection(sphere, ray, Interval(in.min, t_max));
         if (intersection.hit) {
-            result = intersection;
-            in.max = intersection.record.t;
+            result.hit = true;
+            result.record = intersection.record;
+            t_max = intersection.record.t;
         }
     }
 
 
-    for (var i: u32 = 0u; i < arrayLength(&grounds); i++) {
-        let ground = grounds[i];
-        let intersection = ground_intersection(ground, ray, in);
+    for (var j: u32 = 0u; j < arrayLength(&grounds); j++) {
+        let ground = grounds[j];
+        var intersection = ground_intersection(ground, ray, Interval(in.min, t_max));
+        
         if (intersection.hit) {
-            result = intersection;
-            in.max = intersection.record.t;
+            result.hit = true;
+            result.record = intersection.record;
+            t_max = intersection.record.t;
         }
     }
 
@@ -108,7 +165,6 @@ fn world_hit(ray: Ray, interval: Interval) -> IntersectionResult {
 
 fn ray_color(ray: Ray) -> vec3<f32> {
     let intersection = world_hit(ray, Interval(0.0, 1000.0));
-    
     if (intersection.hit) {
         return 0.5 * (intersection.record.normal + vec3<f32>(1.0, 1.0, 1.0));
     }
@@ -221,6 +277,8 @@ fn hit_sphere(sphere: Sphere, ray: Ray) -> f32 {
 fn main(
     @builtin(global_invocation_id) gid: vec3<u32>,
 ) {
+    init_hybrid_taus(gid);
+
     let aspect_ratio: f32 = 1.0;
     let image_width: u32 = 400u;
     let image_height: u32 = u32(f32(image_width) / aspect_ratio);
@@ -241,10 +299,19 @@ fn main(
 
     let pixel_center: vec3<f32> = pixel00_loc + (f32(gid.x) * pixel_delta_u) + (f32(gid.y) * pixel_delta_v);
 
-    let ray_direction = pixel_center - camera_center;
-    let ray = Ray(camera_center, ray_direction);
+    var pixel_color: vec3<f32> = vec3<f32>(0.0, 0.0, 0.0);
+    for (var k = 0u; k < SAMPLE_COUNT; k++) {
+        let px = -0.5 * hybrid_taus();
+        let py = -0.5 * hybrid_taus();
 
-    let pixel_color = ray_color(ray);
+        let pixel_sample = pixel_center + (px * pixel_delta_u) + (py * pixel_delta_v);
+
+        let ray = Ray(camera_center, pixel_sample - camera_center);
+
+        pixel_color += ray_color(ray) / f32(SAMPLE_COUNT);
+    }
+
+    pixel_color = clamp(pixel_color, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
 
     textureStore(output_texture, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(pixel_color, 1.0));
 }

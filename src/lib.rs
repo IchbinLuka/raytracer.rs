@@ -30,6 +30,7 @@ struct Ground {
     center: [f32; 3],
     width: f32,
     height: f32,
+    // TODO: Find better way to pad to 32 bytes
     a: i32, 
     b: i32, 
     c: i32
@@ -393,11 +394,17 @@ impl State {
 
         // Read the results from the buffer
         let buffer_slice = self.output_buffer.slice(..);
-        buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
+        buffer_slice.map_async(wgpu::MapMode::Read, |e| {
+            if let Err(error) = e {
+                println!("Error mapping buffer: {:?}", error);
+            }
+        });
+        
         self.device.poll(wgpu::Maintain::Wait);
 
         let binding = buffer_slice.get_mapped_range();
         let data = binding.as_slice();
+        
 
         let mut pixels: Vec<u8> = vec![0; unpadded_bytes_per_row * size.height as usize];
         for (padded, pixels) in data
