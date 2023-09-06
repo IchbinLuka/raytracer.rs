@@ -24,7 +24,23 @@ fn compute_work_group_count(
 
 const image_size: PhysicalSize<u32> = PhysicalSize::new(400, 400);
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Ground {
+    center: [f32; 3],
+    width: f32,
+    height: f32,
+    a: i32, 
+    b: i32, 
+    c: i32
+}
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Sphere {
+    center: [f32; 3],
+    radius: f32,
+}
 
 struct State {
     surface: wgpu::Surface,
@@ -204,7 +220,28 @@ impl State {
                         view_dimension: wgpu::TextureViewDimension::D2
                     }, 
                     count: None
-                }
+                }, 
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2, 
+                    visibility: wgpu::ShaderStages::COMPUTE, 
+                    ty: wgpu::BindingType::Buffer {
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true }
+                    },
+                    count: None
+                }, 
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3, 
+                    visibility: wgpu::ShaderStages::COMPUTE, 
+                    ty: wgpu::BindingType::Buffer {
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true }
+                    },
+                    count: None
+                }, 
+
             ],
         });
 
@@ -245,6 +282,26 @@ impl State {
             module: &shader,
             entry_point: "main",
         });
+
+        let ground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[Ground {
+                center: [0.0, -1.0, 0.0],
+                width: 100.0,
+                height: 100.0,
+                a: 0, b: 0, c: 0
+            }]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        let sphere_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[Sphere {
+                center: [0.0, 0.0, -1.0],
+                radius: 0.5,
+            }]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -258,7 +315,15 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 1, 
                     resource: wgpu::BindingResource::TextureView(&output_texture.create_view(&wgpu::TextureViewDescriptor::default())),
-                }
+                }, 
+                wgpu::BindGroupEntry {
+                    binding: 2, 
+                    resource: ground_buffer.as_entire_binding(),
+                }, 
+                wgpu::BindGroupEntry {
+                    binding: 3, 
+                    resource: sphere_buffer.as_entire_binding(),
+                }, 
             ],
         });
 
