@@ -1,5 +1,14 @@
-struct ComputeInput {
-    test: u8
+
+@group(0)
+@binding(0)
+var<storage, read> input_buffer: InputBuffer;
+
+@group(0)
+@binding(1)
+var output_texture: texture_storage_2d<rgba8unorm, write>;
+
+struct InputBuffer {
+    spheres: array<Sphere>;
 }
 
 struct Ray {
@@ -15,7 +24,7 @@ struct Sphere {
 const test_sphere: Sphere = Sphere(vec3<f32>(0.0, 0.0, -1.0), 0.5);
 
 fn ray_pos_at(t: f32, ray: Ray) -> vec3<f32> {
-    ray.pos + ray.dir * t
+    return ray.pos + ray.dir * t;
 }
 
 fn unit_vector(v: vec3<f32>) -> vec3<f32> {
@@ -39,10 +48,9 @@ struct IntersectionResult {
 }
 
 fn sphere_intersection(sphere: Sphere, ray: Ray) -> IntersectionResult {
-    let result: IntersectionResult;
+    let result: IntersectionResult = IntersectionResult(false, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 0.0));
     
 
-    
     return result;
 }
 
@@ -57,8 +65,10 @@ fn hit_sphere(sphere: Sphere, ray: Ray) -> bool {
 
 
 @compute
-fn main(input: ComputeInput) {
-    let ray: Ray;
+@workgroup_size(16, 16)
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+) {
 
-
+    textureStore(output_texture, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(f32(gid.x) / 1024.0, f32(gid.y) / 512.0, 0.2, 1.0));
 }

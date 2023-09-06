@@ -14,6 +14,7 @@ struct State {
     bind_group: wgpu::BindGroup,
     buffer: wgpu::Buffer,
     window: Window,
+    output_texture: wgpu::Texture,
 }
 
 
@@ -87,6 +88,58 @@ impl State {
         };
         surface.configure(&device, &config);
 
+
+        let render_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/render_shader.wgsl"));
+        
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[],
+                push_constant_ranges: &[],
+            });
+
+        let targets = [Some(wgpu::ColorTargetState { // 4.
+            format: config.format,
+            blend: Some(wgpu::BlendState::REPLACE),
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+
+        let pipeline_descriptor = wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &render_shader,
+                entry_point: "vertex_main", // 1.
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState { // 3.
+                module: &render_shader,
+                entry_point: "fragment_main",
+                targets: &targets,
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw, // 2.
+                cull_mode: Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None, // 1.
+            multisample: wgpu::MultisampleState {
+                count: 1, // 2.
+                mask: !0, // 3.
+                alpha_to_coverage_enabled: false, // 4.
+            },
+            multiview: None, // 5.
+        };
+
+        let render_pipeline = device.create_render_pipeline(&pipeline_descriptor);
+
     
 
         // let swap_chain = device.create_(&surface, &swap_chain_desc);
@@ -116,14 +169,38 @@ impl State {
             }],
         });
 
+        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("output texture"),
+            size: wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            view_formats: &[wgpu::TextureFormat::Rgba8Unorm],
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::STORAGE_BINDING,
+        });
+        
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }, 
+                wgpu::BindGroupEntry {
+                    binding: 1, 
+                    resource: wgpu::BindingResource::TextureView(&output_texture.create_view(&wgpu::TextureViewDescriptor::default())),
+                }
+            ],
         });
+            
+
 
         // Create a compute shader module
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/ray_tracing_shader.wgsl"));
@@ -141,9 +218,6 @@ impl State {
             entry_point: "main",
         });
 
-        
-
-
         Self {
             surface,
             device,
@@ -152,7 +226,8 @@ impl State {
             bind_group,
             buffer,
             window,
-            render_pipeline: todo!(),
+            render_pipeline,
+            output_texture,
         }
     }
 
@@ -161,16 +236,16 @@ impl State {
         let size = self.window.inner_size();
         
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-        // Create a pipeline
-        let mut cpass =
-            encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
-        cpass.set_pipeline(&self.compute_pipeline);
-        cpass.set_bind_group(0, &self.bind_group, &[]);
-        cpass.dispatch_workgroups(
-            todo!(), todo!(), todo!() //(NUM_THREADS_X / WORK_GROUP_SIZE.0, NUM_THREADS_Y / WORK_GROUP_SIZE.1, 1),
-        );
-
+        {
+            // Create a pipeline
+            let mut cpass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
+            cpass.set_pipeline(&self.compute_pipeline);
+            cpass.set_bind_group(0, &self.bind_group, &[]);
+            cpass.dispatch_workgroups(
+                50, 50, 50 //(NUM_THREADS_X / WORK_GROUP_SIZE.0, NUM_THREADS_Y / WORK_GROUP_SIZE.1, 1),
+            );
+        }
         // Submit the command encoder
         self.queue.submit(std::iter::once(encoder.finish()));
 
@@ -179,33 +254,17 @@ impl State {
         buffer_slice.map_async(wgpu::MapMode::Read, |_| {});
         self.device.poll(wgpu::Maintain::Wait);
 
-        let data = buffer_slice.get_mapped_range().as_slice();
-
-        let texture = self.device.create_texture_with_data(
-            &self.queue, &TextureDescriptor { 
-                label: None, 
-                size: wgpu::Extent3d {
-                    width: size.width,
-                    height: size.height,
-                    depth_or_array_layers: 1,
-                }, 
-                mip_level_count: 1, 
-                sample_count: 1, 
-                dimension: wgpu::TextureDimension::D2, 
-                format: wgpu::TextureFormat::Rgba8UnormSrgb, 
-                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING, 
-                view_formats: &[]
-            }, 
-            data
-        );
+        let binding = buffer_slice.get_mapped_range();
+        let data = binding.as_slice();
 
         self.queue.write_texture(
             ImageCopyTexture {
-                texture: &texture,
+                texture: &self.output_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
-            }, data, 
+            }, 
+            data, 
             ImageDataLayout {
                 offset: 0,
                 bytes_per_row: Some(4 * size.width),
@@ -223,10 +282,12 @@ impl State {
         });
         
         {
+            let view = self.output_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &texture.create_view(&wgpu::TextureViewDescriptor::default()),
+                    view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), // Clear the screen to white
