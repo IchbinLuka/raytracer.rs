@@ -8,7 +8,7 @@ var<storage, read> input_buffer: InputBuffer;
 var output_texture: texture_storage_2d<rgba8unorm, write>;
 
 struct InputBuffer {
-    spheres: array<Sphere>;
+    spheres: array<Sphere>,
 }
 
 struct Ray {
@@ -69,6 +69,30 @@ fn hit_sphere(sphere: Sphere, ray: Ray) -> bool {
 fn main(
     @builtin(global_invocation_id) gid: vec3<u32>,
 ) {
+    let aspect_ratio: f32 = 1.0;
+    let image_width: u32 = 400u;
+    let image_height: u32 = u32(f32(image_width) / aspect_ratio);
+    
+    let camera_center = vec3<f32>(0.0, 0.0, 0.0);
+    let viewport_height: f32 = 2.0;
+    let viewport_width: f32 = aspect_ratio * viewport_height;
+    let focal_length: f32 = 1.0;
 
-    textureStore(output_texture, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(f32(gid.x) / 1024.0, f32(gid.y) / 512.0, 0.2, 1.0));
+    let viewport_u = vec3<f32>(viewport_width, 0.0, 0.0);
+    let viewport_v = vec3<f32>(0.0, -viewport_height, 0.0);
+
+    let pixel_delta_u = viewport_u / f32(image_width);
+    let pixel_delta_v = viewport_v / f32(image_height);
+
+    let viewport_upper_left = camera_center - vec3<f32>(0.0, 0.0, focal_length) - viewport_u / 2.0 - viewport_v / 2.0;
+    let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
+
+    let pixel_center: vec3<f32> = pixel00_loc + (f32(gid.x) * pixel_delta_u) + (f32(gid.y) * pixel_delta_v);
+
+    let ray_direction = pixel_center - camera_center;
+    let ray = Ray(camera_center, ray_direction);
+
+    let pixel_color = ray_color(ray);
+
+    textureStore(output_texture, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(pixel_color, 1.0));
 }
