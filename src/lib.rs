@@ -79,7 +79,7 @@ impl State {
             &wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
-                force_fallback_adapter: true,
+                force_fallback_adapter: false,
             },
         ).await.unwrap_or(
             instance
@@ -287,7 +287,7 @@ impl State {
         let ground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&[Ground {
-                center: [0.0, -1.0, 0.0],
+                center: [0.0, -0.5, 0.0],
                 width: 100.0,
                 height: 100.0,
                 a: 0, b: 0, c: 0
@@ -482,7 +482,14 @@ impl State {
 
 #[cfg_attr(target_arch="wasm32", wasm_bindgen(start))]
 pub async fn run() {
-    println!("Hello, world!");
+    cfg_if::cfg_if! {
+        if #[cfg(target_arch = "wasm32")] {
+            std::panic::set_hook(Box::new(console_error_panic_hook::hook));
+            console_log::init_with_level(log::Level::Warn).expect("Couldn't initialize logger");;
+        } else {
+            env_logger::init();
+        }
+    }
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()

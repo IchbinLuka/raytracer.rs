@@ -2,7 +2,8 @@
 
 const PI: f32 = 3.1415926535897932385;
 
-const SAMPLE_COUNT: u32 = 10u;
+const SAMPLE_COUNT: u32 = 200u;
+const BOUNCE_COUNT: u32 = 10u;
 
 // ---------------------- Bindings ------------------------ //
 
@@ -36,6 +37,12 @@ struct HitRecord {
     point: vec3<f32>,
     normal: vec3<f32>,
     front_face: bool,
+    material: Material,
+}
+
+struct Material {
+    glossiness: f32,
+    color: vec3<f32>,
 }
 
 // ---------------------- Utility ------------------------ //
@@ -63,8 +70,8 @@ fn world_hit(ray: Ray, interval: Interval) -> IntersectionResult {
 
     for (var i: u32 = 0u; i < arrayLength(&spheres); i++) {
         let sphere = spheres[i];
-        var intersection = sphere_intersection(sphere, ray, Interval(in.min, t_max));
-        if (intersection.hit) {
+        let intersection = sphere_intersection(sphere, ray, Interval(in.min, t_max));
+        if intersection.hit {
             result.hit = true;
             result.record = intersection.record;
             t_max = intersection.record.t;
@@ -74,9 +81,9 @@ fn world_hit(ray: Ray, interval: Interval) -> IntersectionResult {
 
     for (var j: u32 = 0u; j < arrayLength(&grounds); j++) {
         let ground = grounds[j];
-        var intersection = ground_intersection(ground, ray, Interval(in.min, t_max));
+        let intersection = ground_intersection(ground, ray, Interval(in.min, t_max));
         
-        if (intersection.hit) {
+        if intersection.hit {
             result.hit = true;
             result.record = intersection.record;
             t_max = intersection.record.t;
@@ -87,14 +94,22 @@ fn world_hit(ray: Ray, interval: Interval) -> IntersectionResult {
 }
 
 fn ray_color(ray: Ray) -> vec3<f32> {
-    let intersection = world_hit(ray, Interval(0.0, 1000.0));
-    if (intersection.hit) {
-        return 0.5 * (intersection.record.normal + vec3<f32>(1.0, 1.0, 1.0));
+
+    var color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+    var current_ray = Ray(ray.pos, ray.dir);
+
+    for (var i: u32 = 0u; i < BOUNCE_COUNT; i++) {
+        let intersection = world_hit(current_ray, Interval(0.01, 1000000.0));
+        if !intersection.hit { break; }
+        
+        let direction = intersection.record.normal + random_unit_vec3();
+        current_ray = Ray(intersection.record.point, direction);
+        color *= 0.7;
     }
 
-    let unit_direction = unit_vector(ray.dir);
+    let unit_direction = unit_vector(current_ray.dir);
     let a = 0.5 * (unit_direction.y + 1.0);
-    return (1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0);
+    return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * color;
 }
 
 // ---------------------- Ray ----------------------------- //
@@ -113,6 +128,7 @@ fn ray_pos_at(t: f32, ray: Ray) -> vec3<f32> {
 struct Sphere {
     center: vec3<f32>,
     radius: f32,
+    material: Material,
 }
 
 fn sphere_intersection(sphere: Sphere, ray: Ray, interval: Interval) -> IntersectionResult {
@@ -121,7 +137,7 @@ fn sphere_intersection(sphere: Sphere, ray: Ray, interval: Interval) -> Intersec
     let oc = ray.pos - sphere.center;
 
     let a = dot(ray.dir, ray.dir);
-    let h = dot(oc, ray.dir); // b / 2
+    let h = dot(oc, ray.dir);
     let c = dot(oc, oc) - sphere.radius * sphere.radius;
     let discriminant = h * h - a * c;
 
@@ -149,6 +165,8 @@ fn sphere_intersection(sphere: Sphere, ray: Ray, interval: Interval) -> Intersec
     record.point = ray_pos_at(root, ray);
     let outward_normal = (record.point - sphere.center) / sphere.radius;
     hit_record_set_face_normal(&record, ray, outward_normal);
+    record.material = sphere.material;
+
     result.record = record;
 
     return result;
@@ -160,6 +178,7 @@ struct Ground {
     center: vec3<f32>,
     width: f32,
     height: f32,
+    material: Material,
 }
 
 
@@ -181,7 +200,9 @@ fn ground_intersection(ground: Ground, ray: Ray, interval: Interval) -> Intersec
     record.point = ray_pos_at(t, ray);
     let outward_normal = vec3<f32>(0.0, 1.0, 0.0);
     hit_record_set_face_normal(&record, ray, outward_normal);
-    
+    record.material = ground.material;
+
+
     result.record = record;
     return result;
 }
@@ -245,6 +266,34 @@ fn lcg_step(z: ptr<private, u32>, a: u32, c: u32) -> u32 {
 
 fn seed(id: u32) -> u32 {
     return id * 1099087573u;
+}
+
+fn random_vec3() -> vec3<f32> {
+    return vec3<f32>(hybrid_taus(), hybrid_taus(), hybrid_taus());
+}
+
+fn random_vec3_in_unit_sphere() -> vec3<f32> {
+    loop {
+        let p = random_vec3() * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
+        if (dot(p, p) >= 1.0) {
+            continue;
+        }
+        return p;
+    }
+    return vec3<f32>(0.0, 0.0, 0.0);
+}
+
+fn random_unit_vec3() -> vec3<f32> {
+    return unit_vector(random_vec3_in_unit_sphere());
+}
+
+fn random_vec3_on_hemisphere(normal: vec3<f32>) -> vec3<f32> {
+    let on_unit_sphere = random_unit_vec3();
+    if (dot(on_unit_sphere, normal) > 0.0) {
+        return on_unit_sphere;
+    } else {
+        return -on_unit_sphere;
+    }
 }
 
 // ------------------------------------------------------------------------------ //
