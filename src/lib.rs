@@ -1,7 +1,7 @@
 #![feature(slice_pattern)]
 use core::slice::SlicePattern;
 
-use wgpu::{util::DeviceExt, TextureDescriptor, ImageDataLayout, ImageCopyTexture, Extent3d};
+use wgpu::{util::DeviceExt, TextureDescriptor, ImageDataLayout, ImageCopyTexture, Extent3d, Device, BindGroup};
 use winit::{window::{Window, WindowBuilder}, event_loop::EventLoop, event::Event, dpi::PhysicalSize};
 
 
@@ -57,6 +57,7 @@ struct State {
     queue: wgpu::Queue,
     compute_pipeline: wgpu::ComputePipeline,
     bind_group: wgpu::BindGroup,
+    image_bind_group: wgpu::BindGroup,
     input_buffer: wgpu::Buffer,
     output_buffer: wgpu::Buffer,
     output_texture: wgpu::Texture,
@@ -252,6 +253,8 @@ impl State {
             ],
         });
 
+        
+
         let output_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("output texture"),
             size: wgpu::Extent3d {
@@ -275,11 +278,14 @@ impl State {
         // Create a compute shader module
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/ray_tracing_shader.wgsl"));
 
+        let image_bind_group_layout = Self::create_image_size_bind_group_layout(&device);
+
+
         // Create compute pipeline layout
         let compute_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Compute Pipeline Layout"),
-                bind_group_layouts: &[&bind_group_layout],
+                bind_group_layouts: &[&bind_group_layout, &image_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -329,6 +335,7 @@ impl State {
                     radius: 0.4,
                     material: Material {
                         color: [0.5, 0.5, 0.8], 
+                        glossiness: 0.4,
                         ..sphere_material
                     },
                 }, 
@@ -369,6 +376,23 @@ impl State {
             ],
         });
 
+        let image_size_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[IMAGE_SIZE.width, IMAGE_SIZE.height]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let image_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &image_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0, 
+                    resource: image_size_buffer.as_entire_binding()
+                }
+            ],
+        });
+
         Self {
             // surface,
             device,
@@ -380,8 +404,30 @@ impl State {
             // window,
             // render_pipeline,
             output_texture,
+            image_bind_group,
         }
     }
+
+    fn create_image_size_bind_group_layout(device: &Device) -> wgpu::BindGroupLayout {
+    
+
+        return device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, 
+                    visibility: wgpu::ShaderStages::COMPUTE, 
+                    ty: wgpu::BindingType::Buffer {
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                        ty: wgpu::BufferBindingType::Uniform
+                    },
+                    count: None
+                }
+            ],
+        });
+    }
+
 
     fn render(&mut self) {
 
@@ -394,6 +440,7 @@ impl State {
                 encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
             cpass.set_pipeline(&self.compute_pipeline);
             cpass.set_bind_group(0, &self.bind_group, &[]);
+            cpass.set_bind_group(1, &self.image_bind_group, &[]);
 
 
             let (dispatch_with, dispatch_height) =

@@ -1,8 +1,6 @@
 // ---------------------- Constants ---------------------- //
 
-const PI: f32 = 3.1415926535897932385;
-
-const SAMPLE_COUNT: u32 = 800u;
+const SAMPLE_COUNT: u32 = 100u;
 const BOUNCE_COUNT: u32 = 10u;
 
 // ---------------------- Bindings ------------------------ //
@@ -22,6 +20,10 @@ var<storage, read> grounds: array<Ground>;
 @group(0)
 @binding(3)
 var<storage, read> spheres: array<Sphere>;
+
+@group(1)
+@binding(0)
+var<uniform> image_size: vec2<u32>;
 
 struct InputBuffer {
     spheres: array<Sphere>,
@@ -334,10 +336,10 @@ fn main(
 ) {
     init_hybrid_taus(gid);
 
-    let aspect_ratio: f32 = 1.0;
-    let image_width: u32 = 1200u;
-    let image_height: u32 = u32(f32(image_width) / aspect_ratio);
-    
+    let image_width: u32 = image_size.x;
+    let image_height: u32 = image_size.y;
+    let aspect_ratio: f32 = f32(image_width) / f32(image_height);
+
     let camera_center = vec3<f32>(0.0, 0.0, 0.0);
     let viewport_height: f32 = 2.0;
     let viewport_width: f32 = aspect_ratio * viewport_height;
