@@ -22,7 +22,7 @@ fn compute_work_group_count(
 }
 
 
-const image_size: PhysicalSize<u32> = PhysicalSize::new(400, 400);
+const IMAGE_SIZE: PhysicalSize<u32> = PhysicalSize::new(1200, 1200);
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -30,10 +30,9 @@ struct Ground {
     center: [f32; 3],
     width: f32,
     height: f32,
-    // TODO: Find better way to pad to 32 bytes
-    a: i32, 
-    b: i32, 
-    c: i32
+    _padding: [u32; 3],
+    material: Material,
+
 }
 
 #[repr(C)]
@@ -41,25 +40,32 @@ struct Ground {
 struct Sphere {
     center: [f32; 3],
     radius: f32,
+    material: Material,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Material {
+    glossiness: f32,
+    _padding: [u32; 3], 
+    color: [f32; 3],
+    _padding_2: u32,
 }
 
 struct State {
-    surface: wgpu::Surface,
     device: wgpu::Device,
     queue: wgpu::Queue,
     compute_pipeline: wgpu::ComputePipeline,
-    render_pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     input_buffer: wgpu::Buffer,
     output_buffer: wgpu::Buffer,
-    window: Window,
     output_texture: wgpu::Texture,
 }
 
 
 impl State {
-    async fn new(window: Window) -> Self {
-        let size = image_size;
+    async fn new() -> Self {
+        let size = IMAGE_SIZE;
 
         // The instance is a handle to our GPU
         // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
@@ -72,22 +78,22 @@ impl State {
         //
         // The surface needs to live as long as the window that created it.
         // State owns the window so this should be safe.
-        let surface = unsafe { instance.create_surface(&window) }.unwrap();
+        // let surface = unsafe { instance.create_surface(&window) }.unwrap();
 
 
         let adapter = instance.request_adapter(
             &wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
+                compatible_surface: None,
                 force_fallback_adapter: false,
             },
         ).await.unwrap_or(
             instance
                 .enumerate_adapters(wgpu::Backends::all())
-                .find(|adapter| {
+                .next(
                     // Check if this adapter supports our surface
-                    adapter.is_surface_supported(&surface)
-                })
+                    // adapter.is_surface_supported(&surface)
+                )
                 .unwrap()
         );
 
@@ -107,11 +113,11 @@ impl State {
         ).await.unwrap();
 
 
-        let surface_caps = surface.get_capabilities(&adapter);
+        // let surface_caps = surface.get_capabilities(&adapter);
         // Shader code in this tutorial assumes an sRGB surface texture. Using a different
         // one will result all the colors coming out darker. If you want to support non
         // sRGB surfaces, you'll need to account for that when drawing to the frame.
-        let surface_format = surface_caps.formats.iter()
+        /* let surface_format = surface_caps.formats.iter()
             .copied()
             .find(|f| f.is_srgb())            
             .unwrap_or(surface_caps.formats[0]);
@@ -178,7 +184,7 @@ impl State {
         };
 
         let render_pipeline = device.create_render_pipeline(&pipeline_descriptor);
-
+        */
         // let swap_chain = device.create_(&surface, &swap_chain_desc);
 
 
@@ -284,23 +290,58 @@ impl State {
             entry_point: "main",
         });
 
+        let ground_material = Material {
+            glossiness: 0.5,
+            color: [0.8, 0.5, 0.25],
+            _padding: [0; 3], 
+            _padding_2: 0,
+        };
+
         let ground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&[Ground {
-                center: [0.0, -0.5, 0.0],
+                center: [0.0, -0.4, 0.0],
                 width: 100.0,
                 height: 100.0,
-                a: 0, b: 0, c: 0
+                material: ground_material,
+                _padding: [0; 3],
             }]),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
+        let sphere_material = Material {
+            glossiness: 0.8,
+            color: [0.8, 0.5, 0.5],
+            _padding: [0; 3],
+            _padding_2: 0,
+        };
+
         let sphere_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
-            contents: bytemuck::cast_slice(&[Sphere {
-                center: [0.0, 0.0, -1.0],
-                radius: 0.5,
-            }]),
+            contents: bytemuck::cast_slice(&[
+                Sphere {
+                    center: [0.9, 0.0, -1.7],
+                    radius: 0.4,
+                    material: sphere_material,
+                }, 
+                Sphere {
+                    center: [-0.9, 0.0, -1.7],
+                    radius: 0.4,
+                    material: Material {
+                        color: [0.5, 0.5, 0.8], 
+                        ..sphere_material
+                    },
+                }, 
+                Sphere {
+                    center: [0.0, 0.0, -1.7],
+                    radius: 0.4,
+                    material: Material {
+                        glossiness: 0.1,
+                        color: [0.1, 0.8, 0.1], 
+                        ..sphere_material
+                    },
+                }
+            ]),
             usage: wgpu::BufferUsages::STORAGE,
         });
         
@@ -329,22 +370,22 @@ impl State {
         });
 
         Self {
-            surface,
+            // surface,
             device,
             queue,
             compute_pipeline,
             bind_group,
             input_buffer,
             output_buffer,
-            window,
-            render_pipeline,
+            // window,
+            // render_pipeline,
             output_texture,
         }
     }
 
     fn render(&mut self) {
 
-        let size = image_size;
+        let size = IMAGE_SIZE;
         
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
         {
@@ -444,7 +485,7 @@ impl State {
         return;
 
         // TODO: Render the output texture to the screen
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        /*let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("Render Encoder"),
         });
         
@@ -474,7 +515,7 @@ impl State {
         }
         
         // Submit the render commands
-        self.queue.submit(Some(encoder.finish()));
+        self.queue.submit(Some(encoder.finish()));*/
 
     }
 
@@ -491,13 +532,15 @@ pub async fn run() {
         }
     }
 
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
+    // let event_loop = EventLoop::new();
+    /*let window = WindowBuilder::new()
         .build(&event_loop)
         .unwrap();
-
-    let mut state = State::new(window).await;
-    event_loop.run(move |event, _, control_flow| {
+    */
+    let mut state = State::new().await;
+    state.render();
+    
+    /*event_loop.run(move |event, _, control_flow| {
         match event {
             Event::WindowEvent { event, .. } => match event {
                 winit::event::WindowEvent::CloseRequested => {
@@ -510,5 +553,5 @@ pub async fn run() {
             }
             _ => {}
         }
-    })
+    })*/
 }

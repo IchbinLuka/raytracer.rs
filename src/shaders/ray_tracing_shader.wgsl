@@ -2,7 +2,7 @@
 
 const PI: f32 = 3.1415926535897932385;
 
-const SAMPLE_COUNT: u32 = 200u;
+const SAMPLE_COUNT: u32 = 800u;
 const BOUNCE_COUNT: u32 = 10u;
 
 // ---------------------- Bindings ------------------------ //
@@ -38,11 +38,6 @@ struct HitRecord {
     normal: vec3<f32>,
     front_face: bool,
     material: Material,
-}
-
-struct Material {
-    glossiness: f32,
-    color: vec3<f32>,
 }
 
 // ---------------------- Utility ------------------------ //
@@ -93,23 +88,9 @@ fn world_hit(ray: Ray, interval: Interval) -> IntersectionResult {
     return result;
 }
 
-fn ray_color(ray: Ray) -> vec3<f32> {
-
-    var color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
-    var current_ray = Ray(ray.pos, ray.dir);
-
-    for (var i: u32 = 0u; i < BOUNCE_COUNT; i++) {
-        let intersection = world_hit(current_ray, Interval(0.01, 1000000.0));
-        if !intersection.hit { break; }
-        
-        let direction = intersection.record.normal + random_unit_vec3();
-        current_ray = Ray(intersection.record.point, direction);
-        color *= 0.7;
-    }
-
-    let unit_direction = unit_vector(current_ray.dir);
-    let a = 0.5 * (unit_direction.y + 1.0);
-    return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * color;
+fn vec3_near_zero(v: vec3<f32>) -> bool {
+    let s = 1e-8;
+    return (abs(v.x) < s) && (abs(v.y) < s) && (abs(v.z) < s);
 }
 
 // ---------------------- Ray ----------------------------- //
@@ -117,10 +98,57 @@ fn ray_color(ray: Ray) -> vec3<f32> {
 struct Ray {
     pos: vec3<f32>,
     dir: vec3<f32>,  
+    color: vec3<f32>,
 }
 
 fn ray_pos_at(t: f32, ray: Ray) -> vec3<f32> {
     return ray.pos + ray.dir * t;
+}
+
+fn ray_color(ray: Ray) -> vec3<f32> {
+
+    var color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+    var current_ray = ray;
+
+    for (var i: u32 = 0u; i < BOUNCE_COUNT; i++) {
+        let intersection = world_hit(current_ray, Interval(0.0001, 1000000.0));
+        if !intersection.hit { break; }
+        
+        let direction = intersection.record.normal + random_unit_vec3();
+        current_ray = material_scatter(intersection.record.material, current_ray, intersection.record);
+    }
+
+    let unit_direction = unit_vector(current_ray.dir);
+    let a = 0.5 * (unit_direction.y + 1.0);
+    return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * current_ray.color;
+}
+
+fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    return v - 2.0 * dot(v, n) * n;
+}
+
+// ------------------------------------- Material ------------------------------------------- //
+
+struct Material {
+    glossiness: f32,
+    color: vec3<f32>,
+}
+
+fn material_scatter(material: Material, ray: Ray, hit_record: HitRecord) -> Ray {
+    let reflected_direction = reflect(unit_vector(ray.dir), hit_record.normal);
+    var diffuse_direction = hit_record.normal + random_unit_vec3();
+    
+    // Avoid zero vector
+    if (vec3_near_zero(diffuse_direction)) {
+        diffuse_direction = hit_record.normal;
+    }
+
+    let scattered = Ray(
+        hit_record.point, 
+        material.glossiness * reflected_direction + (1.0 - material.glossiness) * diffuse_direction, 
+        ray.color * material.color
+    );
+    return scattered;
 }
 
 // ------------------------------------- Shapes ------------------------------------------- //
@@ -307,7 +335,7 @@ fn main(
     init_hybrid_taus(gid);
 
     let aspect_ratio: f32 = 1.0;
-    let image_width: u32 = 400u;
+    let image_width: u32 = 1200u;
     let image_height: u32 = u32(f32(image_width) / aspect_ratio);
     
     let camera_center = vec3<f32>(0.0, 0.0, 0.0);
@@ -333,7 +361,7 @@ fn main(
 
         let pixel_sample = pixel_center + (px * pixel_delta_u) + (py * pixel_delta_v);
 
-        let ray = Ray(camera_center, pixel_sample - camera_center);
+        let ray = Ray(camera_center, pixel_sample - camera_center, vec3<f32>(1.0, 1.0, 1.0));
 
         pixel_color += ray_color(ray) / f32(SAMPLE_COUNT);
     }
