@@ -133,11 +133,16 @@ fn ray_color(ray: Ray) -> vec3<f32> {
         
         let direction = intersection.record.normal + random_unit_vec3();
         current_ray = material_scatter(current_ray, intersection.record);
+        if all(current_ray.dir == vec3<f32>(0.0, 0.0, 0.0)) {
+            // Light did not scatter
+            return current_ray.color;
+        }
     }
 
     let unit_direction = unit_vector(current_ray.dir);
     let a = 0.5 * (unit_direction.y + 1.0);
-    return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * current_ray.color;
+    return vec3<f32>(0.01, 0.01, 0.01);
+    //return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * current_ray.color;
 }
 
 fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
@@ -209,6 +214,15 @@ fn material_scatter(ray: Ray, hit_record: HitRecord) -> Ray {
             
             scatter_direction = refract(unit_direction, hit_record.normal, refraction_ratio);
             break;
+        }
+        case 3u: { // Light
+            scatter_direction = vec3<f32>(0.0, 0.0, 0.0);
+            return Ray(
+                hit_record.point, 
+                scatter_direction, 
+                ray.color * material.color * material.intensity
+            );
+            // break;
         }
         default: {
             break; // TODO: Error

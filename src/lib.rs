@@ -47,6 +47,7 @@ struct Sphere {
 const LAMBERTIAN: u32 = 0;
 const METAL: u32 = 1;
 const DIELECTRIC: u32 = 2;
+const EMISSIVE: u32 = 3;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -362,21 +363,28 @@ impl State {
                     color: [0.1, 0.8, 0.1], 
                     mat_type: LAMBERTIAN,
                     ..sphere_material
+                }, 
+                Material {
+                    intensity: 3.0,
+                    color: [1.0, 1.0, 1.0], 
+                    mat_type: EMISSIVE,
+                    ..sphere_material
                 }
-
             ]),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
         let ground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
-            contents: bytemuck::cast_slice(&[Ground {
-                center: [0.0, -0.4, 0.0],
-                width: 10.0,
-                height: 10.0,
-                material: 0,
-                _padding: [0; 3],
-            }]),
+            contents: bytemuck::cast_slice(&[
+                Ground {
+                    center: [0.0, -0.4, 0.0],
+                    width: 100.0,
+                    height: 100.0,
+                    material: 0,
+                    _padding: [0; 3],
+                }, 
+            ]),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
@@ -400,7 +408,13 @@ impl State {
                     radius: 0.4,
                     material: 3,
                     _padding: [0; 3],
-                }
+                }, 
+                Sphere {
+                    center: [0.0, -0.2, -2.4],
+                    radius: 0.2,
+                    material: 4,
+                    _padding: [0; 3],
+                }, 
             ]),
             usage: wgpu::BufferUsages::STORAGE,
         });
@@ -434,10 +448,10 @@ impl State {
             contents: bytemuck::cast_slice(&[
                 Camera::new(
                     [-2.0, 2.0, 1.0], 
-                    [0.0, 0.0, -1.0], 
+                    [0.0, 0.0, -1.5], 
                     [0.0, 1.0, 0.0], 
                     [size.width, size.height], 
-                    90.0
+                    30.0
                 )
             ]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
