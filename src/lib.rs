@@ -31,7 +31,7 @@ struct Ground {
     width: f32,
     height: f32,
     _padding: [u32; 3],
-    material: Material,
+    material: u32,
 
 }
 
@@ -40,16 +40,52 @@ struct Ground {
 struct Sphere {
     center: [f32; 3],
     radius: f32,
-    material: Material,
+    material: u32,
+    _padding: [u32; 3],
 }
+
+const LAMBERTIAN: u32 = 0;
+const METAL: u32 = 1;
+const DIELECTRIC: u32 = 2;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Material {
-    glossiness: f32,
-    _padding: [u32; 3], 
+    mat_type: u32,
+    intensity: f32,
+    _padding: [u32; 2], 
     color: [f32; 3],
     _padding_2: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Camera {
+    pos: [f32; 3],
+    _padding: u32,
+    look_at: [f32; 3],
+    _padding_2: u32,
+    up: [f32; 3],
+    _padding_3: u32,
+    size: [u32; 2],
+    fov: f32,
+    _padding_4: u32,
+}
+
+impl Camera {
+    fn new(pos: [f32; 3], look_at: [f32; 3], up: [f32; 3], size: [u32; 2], fov: f32) -> Self {
+        Self {
+            pos, 
+            look_at, 
+            up, 
+            size, 
+            fov, 
+            _padding: 0, 
+            _padding_2: 0, 
+            _padding_3: 0,
+            _padding_4: 0, 
+        }
+    }
 }
 
 struct State {
@@ -57,7 +93,7 @@ struct State {
     queue: wgpu::Queue,
     compute_pipeline: wgpu::ComputePipeline,
     bind_group: wgpu::BindGroup,
-    image_bind_group: wgpu::BindGroup,
+    camera_bind_group: wgpu::BindGroup,
     input_buffer: wgpu::Buffer,
     output_buffer: wgpu::Buffer,
     output_texture: wgpu::Texture,
@@ -210,23 +246,23 @@ impl State {
             label: None,
             entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                        ty: wgpu::BufferBindingType::Storage { read_only: false }
-                    },
-                    count: None,
-                }, 
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1, 
+                    binding: 0, 
                     visibility: wgpu::ShaderStages::COMPUTE, 
                     ty: wgpu::BindingType::StorageTexture { 
                         access: wgpu::StorageTextureAccess::WriteOnly, 
                         format: wgpu::TextureFormat::Rgba8Unorm, 
                         view_dimension: wgpu::TextureViewDimension::D2
                     }, 
+                    count: None
+                }, 
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1, 
+                    visibility: wgpu::ShaderStages::COMPUTE, 
+                    ty: wgpu::BindingType::Buffer {
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true }
+                    },
                     count: None
                 }, 
                 wgpu::BindGroupLayoutEntry {
@@ -248,7 +284,7 @@ impl State {
                         ty: wgpu::BufferBindingType::Storage { read_only: true }
                     },
                     count: None
-                }, 
+                }
 
             ],
         });
@@ -278,14 +314,14 @@ impl State {
         // Create a compute shader module
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/ray_tracing_shader.wgsl"));
 
-        let image_bind_group_layout = Self::create_image_size_bind_group_layout(&device);
+        let camera_bindgroup_layout = Self::create_image_size_bind_group_layout(&device);
 
 
         // Create compute pipeline layout
         let compute_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Compute Pipeline Layout"),
-                bind_group_layouts: &[&bind_group_layout, &image_bind_group_layout],
+                bind_group_layouts: &[&bind_group_layout, &camera_bindgroup_layout],
                 push_constant_ranges: &[],
             });
 
@@ -296,57 +332,74 @@ impl State {
             entry_point: "main",
         });
 
-        let ground_material = Material {
-            glossiness: 0.5,
-            color: [0.8, 0.5, 0.25],
-            _padding: [0; 3], 
+        let sphere_material = Material {
+            intensity: 0.2,
+            mat_type: METAL,
+            color: [0.7, 0.7, 0.7],
+            _padding: [0; 2],
             _padding_2: 0,
         };
+
+        let material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+            label: None,
+            contents: bytemuck::cast_slice(&[
+                Material {
+                    intensity: 0.7,
+                    color: [0.8, 0.5, 0.25],
+                    mat_type: METAL, 
+                    _padding: [0; 2], 
+                    _padding_2: 0,
+                }, 
+                sphere_material, 
+                Material {
+                    color: [1.0, 0.9, 1.0], 
+                    intensity: 1.5,
+                    mat_type: DIELECTRIC,
+                    ..sphere_material
+                }, 
+                Material {
+                    intensity: 0.1,
+                    color: [0.1, 0.8, 0.1], 
+                    mat_type: LAMBERTIAN,
+                    ..sphere_material
+                }
+
+            ]),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
 
         let ground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&[Ground {
                 center: [0.0, -0.4, 0.0],
-                width: 100.0,
-                height: 100.0,
-                material: ground_material,
+                width: 10.0,
+                height: 10.0,
+                material: 0,
                 _padding: [0; 3],
             }]),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        let sphere_material = Material {
-            glossiness: 0.8,
-            color: [0.8, 0.5, 0.5],
-            _padding: [0; 3],
-            _padding_2: 0,
-        };
-
         let sphere_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&[
                 Sphere {
-                    center: [0.9, 0.0, -1.7],
+                    center: [0.5, 0.0, -1.7],
                     radius: 0.4,
-                    material: sphere_material,
+                    material: 1,
+                    _padding: [0; 3],
                 }, 
                 Sphere {
-                    center: [-0.9, 0.0, -1.7],
-                    radius: 0.4,
-                    material: Material {
-                        color: [0.5, 0.5, 0.8], 
-                        glossiness: 0.4,
-                        ..sphere_material
-                    },
+                    center: [0.0, -0.2, -1.0],
+                    radius: 0.2,
+                    material: 2,
+                    _padding: [0; 3],
                 }, 
                 Sphere {
-                    center: [0.0, 0.0, -1.7],
+                    center: [-0.5, 0.0, -1.7],
                     radius: 0.4,
-                    material: Material {
-                        glossiness: 0.1,
-                        color: [0.1, 0.8, 0.1], 
-                        ..sphere_material
-                    },
+                    material: 3,
+                    _padding: [0; 3],
                 }
             ]),
             usage: wgpu::BufferUsages::STORAGE,
@@ -358,37 +411,45 @@ impl State {
             layout: &bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(input_buffer.as_entire_buffer_binding()),
-                }, 
-                wgpu::BindGroupEntry {
-                    binding: 1, 
+                    binding: 0, 
                     resource: wgpu::BindingResource::TextureView(&output_texture.create_view(&wgpu::TextureViewDescriptor::default())),
                 }, 
                 wgpu::BindGroupEntry {
-                    binding: 2, 
+                    binding: 1, 
                     resource: ground_buffer.as_entire_binding(),
                 }, 
                 wgpu::BindGroupEntry {
-                    binding: 3, 
+                    binding: 2, 
                     resource: sphere_buffer.as_entire_binding(),
                 }, 
+                wgpu::BindGroupEntry {
+                    binding: 3, 
+                    resource: material_buffer.as_entire_binding(),
+                }
             ],
         });
 
-        let image_size_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
-            contents: bytemuck::cast_slice(&[IMAGE_SIZE.width, IMAGE_SIZE.height]),
+            contents: bytemuck::cast_slice(&[
+                Camera::new(
+                    [-2.0, 2.0, 1.0], 
+                    [0.0, 0.0, -1.0], 
+                    [0.0, 1.0, 0.0], 
+                    [size.width, size.height], 
+                    90.0
+                )
+            ]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let image_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
-            layout: &image_bind_group_layout,
+            layout: &camera_bindgroup_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0, 
-                    resource: image_size_buffer.as_entire_binding()
+                    resource: camera_buffer.as_entire_binding()
                 }
             ],
         });
@@ -404,7 +465,7 @@ impl State {
             // window,
             // render_pipeline,
             output_texture,
-            image_bind_group,
+            camera_bind_group,
         }
     }
 
@@ -440,7 +501,7 @@ impl State {
                 encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
             cpass.set_pipeline(&self.compute_pipeline);
             cpass.set_bind_group(0, &self.bind_group, &[]);
-            cpass.set_bind_group(1, &self.image_bind_group, &[]);
+            cpass.set_bind_group(1, &self.camera_bind_group, &[]);
 
 
             let (dispatch_with, dispatch_height) =

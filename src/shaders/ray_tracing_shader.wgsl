@@ -1,32 +1,43 @@
 // ---------------------- Constants ---------------------- //
 
-const SAMPLE_COUNT: u32 = 100u;
+const SAMPLE_COUNT: u32 = 800u;
 const BOUNCE_COUNT: u32 = 10u;
+const PI: f32 = 3.1415926535897932385;
 
 // ---------------------- Bindings ------------------------ //
 
 @group(0)
 @binding(0)
-var<storage, read> input_buffer: InputBuffer;
-
-@group(0)
-@binding(1)
 var output_texture: texture_storage_2d<rgba8unorm, write>;
 
 @group(0)
-@binding(2)
+@binding(1)
 var<storage, read> grounds: array<Ground>;
 
 @group(0)
-@binding(3)
+@binding(2)
 var<storage, read> spheres: array<Sphere>;
+
+@group(0)
+@binding(3)
+var<storage, read> materials: array<Material>;
 
 @group(1)
 @binding(0)
-var<uniform> image_size: vec2<u32>;
+var<uniform> camera: Camera;
+
+alias MatPtr = u32;
 
 struct InputBuffer {
     spheres: array<Sphere>,
+}
+
+struct Camera {
+    pos: vec3<f32>,
+    look_at: vec3<f32>,
+    up: vec3<f32>,
+    size: vec2<u32>,
+    fov: f32,
 }
 
 struct IntersectionResult {
@@ -39,10 +50,14 @@ struct HitRecord {
     point: vec3<f32>,
     normal: vec3<f32>,
     front_face: bool,
-    material: Material,
+    material: MatPtr,
 }
 
 // ---------------------- Utility ------------------------ //
+
+fn get_material(mat_ptr: MatPtr) -> Material {
+    return materials[mat_ptr];
+}
 
 fn hit_record_set_face_normal(record: ptr<function, HitRecord>, ray: Ray, outward_normal: vec3<f32>) {
     let front_face = dot(ray.dir, outward_normal) < 0.0;
@@ -117,7 +132,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
         if !intersection.hit { break; }
         
         let direction = intersection.record.normal + random_unit_vec3();
-        current_ray = material_scatter(intersection.record.material, current_ray, intersection.record);
+        current_ray = material_scatter(current_ray, intersection.record);
     }
 
     let unit_direction = unit_vector(current_ray.dir);
@@ -129,25 +144,80 @@ fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return v - 2.0 * dot(v, n) * n;
 }
 
+fn refract(uv: vec3<f32>, n: vec3<f32>, etai_over_etat: f32) -> vec3<f32> {
+    let cos_theta = min(dot(-uv, n), 1.0);
+    let r_out_perp = etai_over_etat * (uv + cos_theta * n);
+    let r_out_parallel = -sqrt(abs(1.0 - dot(r_out_perp, r_out_perp))) * n;
+    return r_out_parallel + r_out_perp;
+}
+
+fn schlick_reflectance(cosine: f32, ref_idx: f32) -> f32 {
+    let r0_ = (1.0 - ref_idx) / (1.0 + ref_idx);
+    let r0 = r0_ * r0_;
+    return r0 + (1.0 - r0) * pow((1.0 - cosine), 5.0);
+}
+
 // ------------------------------------- Material ------------------------------------------- //
 
+const LAMBERTIAN = 0u;
+const METAL = 1u;
+const DIELECTRIC = 2u;
+
 struct Material {
-    glossiness: f32,
+    mat_type: u32,
+    intensity: f32,
     color: vec3<f32>,
 }
 
-fn material_scatter(material: Material, ray: Ray, hit_record: HitRecord) -> Ray {
+fn material_scatter(ray: Ray, hit_record: HitRecord) -> Ray {
     let reflected_direction = reflect(unit_vector(ray.dir), hit_record.normal);
-    var diffuse_direction = hit_record.normal + random_unit_vec3();
-    
-    // Avoid zero vector
-    if (vec3_near_zero(diffuse_direction)) {
-        diffuse_direction = hit_record.normal;
+    // var diffuse_direction = hit_record.normal + random_unit_vec3();
+
+    var scatter_direction: vec3<f32>;
+
+    let material = get_material(hit_record.material);
+
+    switch material.mat_type {
+        case 0u: { // Lambertian
+            scatter_direction = hit_record.normal + random_unit_vec3();
+
+            // Avoid zero vector
+            if (vec3_near_zero(scatter_direction)) {
+                scatter_direction = hit_record.normal;
+            }
+            break;
+        }
+        case 1u: { // Metal
+            scatter_direction = reflected_direction + material.intensity * random_unit_vec3();
+            break;
+        }
+        case 2u: { // Dielectric
+            let refraction_ratio = select(material.intensity, 1.0 / material.intensity, hit_record.front_face);
+
+            let unit_direction = unit_vector(ray.dir);
+            
+            let cos_theta = min(dot(-unit_direction, hit_record.normal), 1.0);
+            let sin_theta = sqrt(1.0 - cos_theta * cos_theta);
+
+            let cannot_refract = refraction_ratio * sin_theta > 1.0;
+
+            if cannot_refract || schlick_reflectance(cos_theta, refraction_ratio) > hybrid_taus() {
+                // Ray cannot be refracted, since Snells law cannot be satisfied
+                scatter_direction = reflect(unit_direction, hit_record.normal);
+                break;
+            }
+            
+            scatter_direction = refract(unit_direction, hit_record.normal, refraction_ratio);
+            break;
+        }
+        default: {
+            break; // TODO: Error
+        }
     }
 
     let scattered = Ray(
         hit_record.point, 
-        material.glossiness * reflected_direction + (1.0 - material.glossiness) * diffuse_direction, 
+        scatter_direction, 
         ray.color * material.color
     );
     return scattered;
@@ -158,7 +228,7 @@ fn material_scatter(material: Material, ray: Ray, hit_record: HitRecord) -> Ray 
 struct Sphere {
     center: vec3<f32>,
     radius: f32,
-    material: Material,
+    material: MatPtr,
 }
 
 fn sphere_intersection(sphere: Sphere, ray: Ray, interval: Interval) -> IntersectionResult {
@@ -208,7 +278,7 @@ struct Ground {
     center: vec3<f32>,
     width: f32,
     height: f32,
-    material: Material,
+    material: MatPtr,
 }
 
 
@@ -217,7 +287,15 @@ fn ground_intersection(ground: Ground, ray: Ray, interval: Interval) -> Intersec
 
     let t = (ground.center.y - ray.pos.y) / ray.dir.y;
 
-    if (t < interval.min || interval.max < t) {
+    let pos = ray_pos_at(t, ray);
+
+    let x = pos.x - ground.center.x;
+    let z = pos.z - ground.center.z;
+
+    let intersected = interval_contains(Interval(-ground.width / 2.0, ground.width / 2.0), x) &&
+                      interval_contains(Interval(-ground.height / 2.0, ground.height / 2.0), z);
+
+    if (t < interval.min || interval.max < t || !intersected) {
         result.hit = false;
         return result;
     }
@@ -336,22 +414,31 @@ fn main(
 ) {
     init_hybrid_taus(gid);
 
-    let image_width: u32 = image_size.x;
-    let image_height: u32 = image_size.y;
+    let fov: f32 = camera.fov;
+
+    let image_width: u32 = camera.size.x;
+    let image_height: u32 = camera.size.y;
     let aspect_ratio: f32 = f32(image_width) / f32(image_height);
 
-    let camera_center = vec3<f32>(0.0, 0.0, 0.0);
-    let viewport_height: f32 = 2.0;
+    let camera_center = camera.pos;
+    
+    let focal_length: f32 = length(camera_center - camera.look_at);
+    let theta = fov / 360.0 * PI * 2.0;
+    let viewport_height = 2.0 * tan(theta / 2.0) * focal_length;
+    
     let viewport_width: f32 = aspect_ratio * viewport_height;
-    let focal_length: f32 = 1.0;
 
-    let viewport_u = vec3<f32>(viewport_width, 0.0, 0.0);
-    let viewport_v = vec3<f32>(0.0, -viewport_height, 0.0);
+    let w = unit_vector(camera_center - camera.look_at);
+    let u = unit_vector(cross(camera.up, w));
+    let v = cross(w, u);
+
+    let viewport_u = viewport_width * u;
+    let viewport_v = viewport_height * -v;
 
     let pixel_delta_u = viewport_u / f32(image_width);
     let pixel_delta_v = viewport_v / f32(image_height);
 
-    let viewport_upper_left = camera_center - vec3<f32>(0.0, 0.0, focal_length) - viewport_u / 2.0 - viewport_v / 2.0;
+    let viewport_upper_left = camera_center - (focal_length * w) - viewport_u / 2.0 - viewport_v / 2.0;
     let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
     let pixel_center: vec3<f32> = pixel00_loc + (f32(gid.x) * pixel_delta_u) + (f32(gid.y) * pixel_delta_v);
