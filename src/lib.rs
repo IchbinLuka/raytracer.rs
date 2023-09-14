@@ -2,7 +2,7 @@
 
 use core::slice::SlicePattern;
 
-use collada::{Triangles, PrimitiveElement};
+use collada::PrimitiveElement;
 use wgpu::{Device, util::DeviceExt, ImageCopyTexture};
 use winit::dpi::PhysicalSize;
 mod types;
@@ -98,15 +98,6 @@ impl State {
             None, // Trace path
         ).await.unwrap();
 
-
-        // Create a buffer to hold the results
-        let buffer_size = 200usize;
-        let input_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: buffer_size as u64,
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
 
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -479,6 +470,21 @@ impl ToSlice for collada::Vertex {
     }
 }
 
+type Color = [f32; 3];
+
+trait FromHex {
+    fn from_hex(hex: u32) -> Self;
+}
+
+impl FromHex for Color {
+    fn from_hex(hex: u32) -> Self {
+        let r = ((hex >> 16) & 0xFF) as f32 / 255.0;
+        let g = ((hex >> 8) & 0xFF) as f32 / 255.0;
+        let b = (hex & 0xFF) as f32 / 255.0;
+        [r, g, b]
+    }
+}
+
 
 #[cfg_attr(target_arch="wasm32", wasm_bindgen(start))]
 pub async fn run() {
@@ -491,7 +497,7 @@ pub async fn run() {
         }
     }
 
-    let suzanne = collada::document::ColladaDocument::from_str(include_str!("assets/suzanne.dae")).unwrap();
+    let suzanne = collada::document::ColladaDocument::from_str(include_str!("assets/house.dae")).unwrap();
 
     let objects = suzanne.get_obj_set().unwrap().objects;
 
@@ -506,7 +512,7 @@ pub async fn run() {
                             object.vertices[*a].to_slice(), 
                             object.vertices[*b].to_slice(), 
                             object.vertices[*c].to_slice(), 
-                            1u32
+                            5u32
                         )
                     );
                 }
@@ -520,24 +526,25 @@ pub async fn run() {
         Material::new(DIELECTRIC, 1.5, [1.0, 0.9, 1.0]), 
         Material::new(LAMBERTIAN, 0.1, [0.1, 0.8, 0.1]), 
         Material::new(EMISSIVE, 3.0, [1.0, 1.0, 1.0]), 
+        Material::new(LAMBERTIAN, 0.1, Color::from_hex(0xffffff)), 
     ];
 
     let spheres = &[
         // Sphere::new([0.5, 0.0, -1.7], 0.4, 1), 
         Sphere::new([0.0, -1.8, -1.0], 0.2, 2),
-        // Sphere::new([-0.5, 0.0, -1.7], 0.4, 3),
+        Sphere::new([0.0, 3.0, 0.0], 2.0, 4),
         // Sphere::new([0.0, -0.8, -1.0], 0.2, 4),
     ];
 
     let grounds = &[
-        Ground::new([0.0, -2.0, 0.0], 100.0, 100.0, 0),
+        Ground::new([0.0, 0.1, 0.0], 100.0, 100.0, 0),
     ];
 
     let triangles = triangle_vec.as_slice();
 
     let camera = Camera::new(
-        [0.0, 0.5, -5.0], 
-        [0.0, 0.0, -1.5], 
+        [0.0, 5.5, 5.0], 
+        [0.0, 0.0, 10.0], 
         [0.0, 1.0, 0.0], 
         [IMAGE_SIZE.width, IMAGE_SIZE.height], 
         90.0

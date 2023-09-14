@@ -1,7 +1,7 @@
 // ---------------------- Constants ---------------------- //
 
 const SAMPLE_COUNT: u32 = 10u;
-const BOUNCE_COUNT: u32 = 5u;
+const BOUNCE_COUNT: u32 = 10u;
 const PI: f32 = 3.1415926535897932385;
 
 // ---------------------- Bindings ------------------------ //
@@ -142,9 +142,13 @@ fn ray_color(ray: Ray) -> vec3<f32> {
 
     var color: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
     var current_ray = ray;
-
-    for (var i: u32 = 0u; i < BOUNCE_COUNT; i++) {
-        let intersection = world_hit(current_ray, Interval(0.0001, 1000000.0));
+    var i = 0u;
+    loop {
+        if i >= BOUNCE_COUNT { 
+            current_ray.color = vec3<f32>(0.0, 0.0, 0.0);
+            break;
+        }
+        let intersection = world_hit(current_ray, Interval(0.00001, 1000000.0));
         if !intersection.hit { break; }
         
         let direction = intersection.record.normal + random_unit_vec3();
@@ -153,6 +157,7 @@ fn ray_color(ray: Ray) -> vec3<f32> {
             // Light did not scatter
             return current_ray.color;
         }
+        i++;
     }
 
     let unit_direction = unit_vector(current_ray.dir);
