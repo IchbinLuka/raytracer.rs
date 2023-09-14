@@ -3,7 +3,7 @@
 use core::slice::SlicePattern;
 
 use collada::{Triangles, PrimitiveElement};
-use wgpu::{Device, util::DeviceExt};
+use wgpu::{Device, util::DeviceExt, ImageCopyTexture};
 use winit::dpi::PhysicalSize;
 mod types;
 
@@ -27,6 +27,7 @@ fn compute_work_group_count(
 
 
 const IMAGE_SIZE: PhysicalSize<u32> = PhysicalSize::new(1200, 1200);
+const ITER_COUNT: u32 = 5;
 
 
 struct State {
@@ -35,9 +36,10 @@ struct State {
     compute_pipeline: wgpu::ComputePipeline,
     bind_group: wgpu::BindGroup,
     camera_bind_group: wgpu::BindGroup,
-    input_buffer: wgpu::Buffer,
     output_buffer: wgpu::Buffer,
     output_texture: wgpu::Texture,
+    input_texture: wgpu::Texture,
+    iter_info_buffer: wgpu::Buffer,
 }
 
 
@@ -154,12 +156,20 @@ impl State {
                     binding: 4, 
                     ..read_only_buffer
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5, 
+                    visibility: wgpu::ShaderStages::COMPUTE, 
+                    ty: wgpu::BindingType::Texture { 
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false }, 
+                        view_dimension: wgpu::TextureViewDimension::D2, 
+                        multisampled: false 
+                    }, 
+                    count: None
+                }, 
             ],
         });
 
-        
-
-        let output_texture = device.create_texture(&wgpu::TextureDescriptor {
+        let output_descriptor = wgpu::TextureDescriptor {
             label: Some("output texture"),
             size: wgpu::Extent3d {
                 width: size.width,
@@ -177,13 +187,20 @@ impl State {
                 wgpu::TextureUsages::TEXTURE_BINDING | 
                 wgpu::TextureUsages::COPY_DST | 
                 wgpu::TextureUsages::RENDER_ATTACHMENT
+        };
+
+        let output_texture = device.create_texture(&output_descriptor);
+
+        let input_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Input Texture"),
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, 
+            ..output_descriptor
         });
 
         // Create a compute shader module
         let shader = device.create_shader_module(wgpu::include_wgsl!("shaders/ray_tracing_shader.wgsl"));
 
         let camera_bindgroup_layout = Self::create_image_size_bind_group_layout(&device);
-
 
         // Create compute pipeline layout
         let compute_pipeline_layout =
@@ -250,7 +267,11 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 4, 
                     resource: material_buffer.as_entire_binding(),
-                }
+                }, 
+                wgpu::BindGroupEntry {
+                    binding: 5, 
+                    resource: wgpu::BindingResource::TextureView(&input_texture.create_view(&wgpu::TextureViewDescriptor::default())),
+                },
             ],
         });
 
@@ -262,6 +283,17 @@ impl State {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        let iter_info_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[
+                IterationInfo {
+                    iter_count: ITER_COUNT, 
+                    counter: 0
+                }
+            ]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &camera_bindgroup_layout,
@@ -269,6 +301,10 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 0, 
                     resource: camera_buffer.as_entire_binding()
+                }, 
+                wgpu::BindGroupEntry {
+                    binding: 1, 
+                    resource: iter_info_buffer.as_entire_binding()
                 }
             ],
         });
@@ -279,30 +315,35 @@ impl State {
             queue,
             compute_pipeline,
             bind_group,
-            input_buffer,
             output_buffer,
             // window,
             // render_pipeline,
             output_texture,
             camera_bind_group,
+            input_texture,
+            iter_info_buffer
         }
     }
 
     fn create_image_size_bind_group_layout(device: &Device) -> wgpu::BindGroupLayout {
-    
-
+        let uniform_entry = wgpu::BindGroupLayoutEntry {
+            binding: 0, 
+            visibility: wgpu::ShaderStages::COMPUTE, 
+            ty: wgpu::BindingType::Buffer {
+                has_dynamic_offset: false,
+                min_binding_size: None,
+                ty: wgpu::BufferBindingType::Uniform
+            },
+            count: None
+        };
+        
         return device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[
+                uniform_entry, 
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0, 
-                    visibility: wgpu::ShaderStages::COMPUTE, 
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                        ty: wgpu::BufferBindingType::Uniform
-                    },
-                    count: None
+                    binding: 1, 
+                    ..uniform_entry
                 }
             ],
         });
@@ -310,7 +351,19 @@ impl State {
 
 
     fn render(&mut self) {
+        for i in 0..ITER_COUNT {
+            println!("Iteration: {}", i);
+            self.queue.write_buffer(&self.iter_info_buffer, 0, bytemuck::cast_slice(
+                &[IterationInfo {
+                    iter_count: ITER_COUNT, 
+                    counter: i
+                }]
+            ));
+            self.render_step();
+        }        
+    }
 
+    fn render_step(&mut self) {
         let size = IMAGE_SIZE;
         
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -331,9 +384,36 @@ impl State {
             );
         }
 
+        let copy_texture = ImageCopyTexture {
+            texture: &self.output_texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        };
+        
+
+        encoder.copy_texture_to_texture(
+            copy_texture, 
+            ImageCopyTexture {
+                texture: &self.input_texture,
+                ..copy_texture
+            },
+            wgpu::Extent3d {
+                width: size.width,
+                height: size.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
+    fn save(&self) {
+        let size = IMAGE_SIZE;
+
         let padded_bytes_per_row = padded_bytes_per_row(size.width);
         let unpadded_bytes_per_row = size.width as usize * 4;
         
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
         encoder.copy_texture_to_buffer(
             wgpu::ImageCopyTexture {
@@ -385,14 +465,20 @@ impl State {
         if let Some(output_image) = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(size.width, size.height, &pixels[..]) {
             output_image.save("output.png").unwrap();
         }
-
     }
 
 }
 
-fn vertex_to_slice(vertex: &collada::Vertex) -> [f32; 3] {
-    [vertex.x as f32, vertex.y as f32, vertex.z as f32]
+trait ToSlice {
+    fn to_slice(&self) -> [f32; 3];
 }
+
+impl ToSlice for collada::Vertex {
+    fn to_slice(&self) -> [f32; 3] {
+        [self.x as f32, self.y as f32, self.z as f32]
+    }
+}
+
 
 #[cfg_attr(target_arch="wasm32", wasm_bindgen(start))]
 pub async fn run() {
@@ -417,9 +503,9 @@ pub async fn run() {
                 for (a, b, c) in &triangles.vertices {
                     triangle_vec.push(
                         Triangle::new(
-                            vertex_to_slice(&object.vertices[*a]), 
-                            vertex_to_slice(&object.vertices[*b]), 
-                            vertex_to_slice(&object.vertices[*c]), 
+                            object.vertices[*a].to_slice(), 
+                            object.vertices[*b].to_slice(), 
+                            object.vertices[*c].to_slice(), 
                             1u32
                         )
                     );
@@ -440,7 +526,7 @@ pub async fn run() {
         // Sphere::new([0.5, 0.0, -1.7], 0.4, 1), 
         Sphere::new([0.0, -1.8, -1.0], 0.2, 2),
         // Sphere::new([-0.5, 0.0, -1.7], 0.4, 3),
-        Sphere::new([0.0, -0.8, -1.0], 0.2, 4),
+        // Sphere::new([0.0, -0.8, -1.0], 0.2, 4),
     ];
 
     let grounds = &[
@@ -459,4 +545,5 @@ pub async fn run() {
 
     let mut state = State::new(spheres, grounds, triangles, materials, camera).await;
     state.render();
+    state.save();
 }

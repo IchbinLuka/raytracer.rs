@@ -11,6 +11,10 @@ const PI: f32 = 3.1415926535897932385;
 var output_texture: texture_storage_2d<rgba8unorm, write>;
 
 @group(0)
+@binding(5)
+var input_texture: texture_2d<f32>;
+
+@group(0)
 @binding(1)
 var<storage, read> grounds: array<Ground>;
 
@@ -30,11 +34,22 @@ var<storage, read> materials: array<Material>;
 @binding(0)
 var<uniform> camera: Camera;
 
+@group(1)
+@binding(1)
+var<uniform> iter_info: IterationInfo;
+
 alias MatPtr = u32;
+
+struct IterationInfo {
+    iter_count: u32,
+    counter: u32,
+}
+
 
 struct InputBuffer {
     spheres: array<Sphere>,
 }
+
 
 struct Camera {
     pos: vec3<f32>,
@@ -142,8 +157,8 @@ fn ray_color(ray: Ray) -> vec3<f32> {
 
     let unit_direction = unit_vector(current_ray.dir);
     let a = 0.5 * (unit_direction.y + 1.0);
-    return vec3<f32>(0.01, 0.01, 0.01);
-    // return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * current_ray.color;
+    // return vec3<f32>(0.01, 0.01, 0.01);
+    return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * current_ray.color;
 }
 
 fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
@@ -496,7 +511,7 @@ fn random_vec3_on_hemisphere(normal: vec3<f32>) -> vec3<f32> {
 fn main(
     @builtin(global_invocation_id) gid: vec3<u32>,
 ) {
-    init_hybrid_taus(gid);
+    init_hybrid_taus(gid + iter_info.counter);
 
     let fov: f32 = camera.fov;
 
@@ -541,5 +556,13 @@ fn main(
 
     pixel_color = clamp(pixel_color, vec3<f32>(0.0, 0.0, 0.0), vec3<f32>(1.0, 1.0, 1.0));
 
-    textureStore(output_texture, vec2<i32>(i32(gid.x), i32(gid.y)), vec4<f32>(pixel_color, 1.0));
+
+
+    let initial = textureLoad(input_texture, vec2<i32>(gid.xy), 0);
+
+    textureStore(
+        output_texture, 
+        vec2<i32>(i32(gid.x), i32(gid.y)), 
+        vec4<f32>(initial.xyz + (pixel_color / f32(iter_info.iter_count)), 1.0)
+    );
 }

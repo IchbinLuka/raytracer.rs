@@ -6,7 +6,6 @@ pub struct Ground {
     pub height: f32,
     _padding: [u32; 3],
     pub material: u32,
-
 }
 
 impl Ground {
@@ -107,7 +106,6 @@ pub struct Triangle {
     pub b: [f32; 3],
     _padding_2: u32,
     pub c: [f32; 3],
-    // _padding_4: [u32; 2],
     pub material: u32,
     
 }
@@ -123,4 +121,11 @@ impl Triangle {
             material, 
         }
     }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IterationInfo {
+    pub iter_count: u32,
+    pub counter: u32,
 }
