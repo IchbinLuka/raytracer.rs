@@ -1,9 +1,12 @@
 #![feature(slice_pattern)]
+
 use core::slice::SlicePattern;
 
-use wgpu::{util::DeviceExt, TextureDescriptor, ImageDataLayout, ImageCopyTexture, Extent3d, Device, BindGroup};
-use winit::{window::{Window, WindowBuilder}, event_loop::EventLoop, event::Event, dpi::PhysicalSize};
+use wgpu::{Device, util::DeviceExt};
+use winit::dpi::PhysicalSize;
+mod types;
 
+use types::*;
 
 fn padded_bytes_per_row(width: u32) -> usize {
     let bytes_per_row = width as usize * 4;
@@ -24,70 +27,6 @@ fn compute_work_group_count(
 
 const IMAGE_SIZE: PhysicalSize<u32> = PhysicalSize::new(1200, 1200);
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Ground {
-    center: [f32; 3],
-    width: f32,
-    height: f32,
-    _padding: [u32; 3],
-    material: u32,
-
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Sphere {
-    center: [f32; 3],
-    radius: f32,
-    material: u32,
-    _padding: [u32; 3],
-}
-
-const LAMBERTIAN: u32 = 0;
-const METAL: u32 = 1;
-const DIELECTRIC: u32 = 2;
-const EMISSIVE: u32 = 3;
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Material {
-    mat_type: u32,
-    intensity: f32,
-    _padding: [u32; 2], 
-    color: [f32; 3],
-    _padding_2: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct Camera {
-    pos: [f32; 3],
-    _padding: u32,
-    look_at: [f32; 3],
-    _padding_2: u32,
-    up: [f32; 3],
-    _padding_3: u32,
-    size: [u32; 2],
-    fov: f32,
-    _padding_4: u32,
-}
-
-impl Camera {
-    fn new(pos: [f32; 3], look_at: [f32; 3], up: [f32; 3], size: [u32; 2], fov: f32) -> Self {
-        Self {
-            pos, 
-            look_at, 
-            up, 
-            size, 
-            fov, 
-            _padding: 0, 
-            _padding_2: 0, 
-            _padding_3: 0,
-            _padding_4: 0, 
-        }
-    }
-}
 
 struct State {
     device: wgpu::Device,
@@ -102,7 +41,13 @@ struct State {
 
 
 impl State {
-    async fn new() -> Self {
+    async fn new(
+        spheres: &[Sphere], 
+        grounds: &[Ground], 
+        triangles: &[Triangle], 
+        materials: &[Material], 
+        camera: Camera
+    ) -> Self {
         let size = IMAGE_SIZE;
 
         // The instance is a handle to our GPU
@@ -227,7 +172,7 @@ impl State {
 
 
         // Create a buffer to hold the results
-        let buffer_size = 200 as usize;
+        let buffer_size = 200usize;
         let input_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: buffer_size as u64,
@@ -237,10 +182,21 @@ impl State {
 
         let output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
-            size: (padded_bytes_per_row(size.width) as u64 * size.height as u64 * 4) as u64,
+            size: padded_bytes_per_row(size.width) as u64 * size.height as u64 * 4,
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+
+        let read_only_buffer = wgpu::BindGroupLayoutEntry {
+            binding: 1, 
+            visibility: wgpu::ShaderStages::COMPUTE, 
+            ty: wgpu::BindingType::Buffer {
+                has_dynamic_offset: false,
+                min_binding_size: None,
+                ty: wgpu::BufferBindingType::Storage { read_only: true }
+            },
+            count: None
+        };
 
         // Create a bind group
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -258,35 +214,20 @@ impl State {
                 }, 
                 wgpu::BindGroupLayoutEntry {
                     binding: 1, 
-                    visibility: wgpu::ShaderStages::COMPUTE, 
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                        ty: wgpu::BufferBindingType::Storage { read_only: true }
-                    },
-                    count: None
-                }, 
+                    ..read_only_buffer
+                },
                 wgpu::BindGroupLayoutEntry {
                     binding: 2, 
-                    visibility: wgpu::ShaderStages::COMPUTE, 
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                        ty: wgpu::BufferBindingType::Storage { read_only: true }
-                    },
-                    count: None
-                }, 
+                    ..read_only_buffer
+                },
                 wgpu::BindGroupLayoutEntry {
                     binding: 3, 
-                    visibility: wgpu::ShaderStages::COMPUTE, 
-                    ty: wgpu::BindingType::Buffer {
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                        ty: wgpu::BufferBindingType::Storage { read_only: true }
-                    },
-                    count: None
-                }
-
+                    ..read_only_buffer
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4, 
+                    ..read_only_buffer
+                },
             ],
         });
 
@@ -333,90 +274,30 @@ impl State {
             entry_point: "main",
         });
 
-        let sphere_material = Material {
-            intensity: 0.2,
-            mat_type: METAL,
-            color: [0.7, 0.7, 0.7],
-            _padding: [0; 2],
-            _padding_2: 0,
+        let buffer_init_descriptor = wgpu::util::BufferInitDescriptor {
+            label: None,
+            contents: bytemuck::cast_slice(&[0; 1]),
+            usage: wgpu::BufferUsages::STORAGE,
         };
 
         let material_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
-            label: None,
-            contents: bytemuck::cast_slice(&[
-                Material {
-                    intensity: 0.7,
-                    color: [0.8, 0.5, 0.25],
-                    mat_type: METAL, 
-                    _padding: [0; 2], 
-                    _padding_2: 0,
-                }, 
-                sphere_material, 
-                Material {
-                    color: [1.0, 0.9, 1.0], 
-                    intensity: 1.5,
-                    mat_type: DIELECTRIC,
-                    ..sphere_material
-                }, 
-                Material {
-                    intensity: 0.1,
-                    color: [0.1, 0.8, 0.1], 
-                    mat_type: LAMBERTIAN,
-                    ..sphere_material
-                }, 
-                Material {
-                    intensity: 3.0,
-                    color: [1.0, 1.0, 1.0], 
-                    mat_type: EMISSIVE,
-                    ..sphere_material
-                }
-            ]),
-            usage: wgpu::BufferUsages::STORAGE,
+            contents: bytemuck::cast_slice(materials),
+            ..buffer_init_descriptor
         });
 
         let ground_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&[
-                Ground {
-                    center: [0.0, -0.4, 0.0],
-                    width: 100.0,
-                    height: 100.0,
-                    material: 0,
-                    _padding: [0; 3],
-                }, 
-            ]),
-            usage: wgpu::BufferUsages::STORAGE,
+            contents: bytemuck::cast_slice(grounds),
+            ..buffer_init_descriptor
         });
 
         let sphere_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::cast_slice(&[
-                Sphere {
-                    center: [0.5, 0.0, -1.7],
-                    radius: 0.4,
-                    material: 1,
-                    _padding: [0; 3],
-                }, 
-                Sphere {
-                    center: [0.0, -0.2, -1.0],
-                    radius: 0.2,
-                    material: 2,
-                    _padding: [0; 3],
-                }, 
-                Sphere {
-                    center: [-0.5, 0.0, -1.7],
-                    radius: 0.4,
-                    material: 3,
-                    _padding: [0; 3],
-                }, 
-                Sphere {
-                    center: [0.0, -0.2, -2.4],
-                    radius: 0.2,
-                    material: 4,
-                    _padding: [0; 3],
-                }, 
-            ]),
-            usage: wgpu::BufferUsages::STORAGE,
+            contents: bytemuck::cast_slice(spheres),
+            ..buffer_init_descriptor
+        });
+
+        let triangle_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            contents: bytemuck::cast_slice(triangles),
+            ..buffer_init_descriptor
         });
         
 
@@ -438,6 +319,10 @@ impl State {
                 }, 
                 wgpu::BindGroupEntry {
                     binding: 3, 
+                    resource: triangle_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4, 
                     resource: material_buffer.as_entire_binding(),
                 }
             ],
@@ -446,13 +331,7 @@ impl State {
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&[
-                Camera::new(
-                    [-2.0, 2.0, 1.0], 
-                    [0.0, 0.0, -1.5], 
-                    [0.0, 1.0, 0.0], 
-                    [size.width, size.height], 
-                    30.0
-                )
+                camera
             ]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -659,7 +538,38 @@ pub async fn run() {
         .build(&event_loop)
         .unwrap();
     */
-    let mut state = State::new().await;
+    let materials = &[
+        Material::new(METAL, 0.7, [0.8, 0.5, 0.25]), 
+        Material::new(METAL, 0.2, [0.7, 0.7, 0.7]), 
+        Material::new(DIELECTRIC, 1.5, [1.0, 0.9, 1.0]), 
+        Material::new(LAMBERTIAN, 0.1, [0.1, 0.8, 0.1]), 
+        Material::new(EMISSIVE, 3.0, [1.0, 1.0, 1.0]), 
+    ];
+
+    let spheres = &[
+        // Sphere::new([0.5, 0.0, -1.7], 0.4, 1), 
+        Sphere::new([0.0, -0.2, -1.0], 0.2, 2),
+        // Sphere::new([-0.5, 0.0, -1.7], 0.4, 3),
+        // Sphere::new([0.0, -0.2, -2.4], 0.2, 4),
+    ];
+
+    let grounds = &[
+        Ground::new([0.0, -0.4, 0.0], 100.0, 100.0, 0),
+    ];
+
+    let triangles = &[
+        Triangle::new([1.0, 0.2, 0.0], [0.0, 0.2, 1.0], [1.0, 0.2, 1.0], 1),
+    ];
+
+    let camera = Camera::new(
+        [-4.0, 4.0, 2.0], 
+        [0.0, 0.0, -1.5], 
+        [0.0, 1.0, 0.0], 
+        [IMAGE_SIZE.width, IMAGE_SIZE.height], 
+        90.0
+    );
+
+    let mut state = State::new(spheres, grounds, triangles, materials, camera).await;
     state.render();
     
     /*event_loop.run(move |event, _, control_flow| {

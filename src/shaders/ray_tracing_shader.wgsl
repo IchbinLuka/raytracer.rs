@@ -20,6 +20,10 @@ var<storage, read> spheres: array<Sphere>;
 
 @group(0)
 @binding(3)
+var<storage, read> triangles: array<Triangle>;
+
+@group(0)
+@binding(4)
 var<storage, read> materials: array<Material>;
 
 @group(1)
@@ -78,28 +82,25 @@ fn world_hit(ray: Ray, interval: Interval) -> IntersectionResult {
     var in: Interval = interval;
     var t_max: f32 = interval.max;
 
-    // let test = array<IntersectionResult, total_item_count>();
-
     for (var i: u32 = 0u; i < arrayLength(&spheres); i++) {
         let sphere = spheres[i];
-        let intersection = sphere_intersection(sphere, ray, Interval(in.min, t_max));
-        if intersection.hit {
-            result.hit = true;
-            result.record = intersection.record;
-            t_max = intersection.record.t;
-        }
+        let intersection = sphere_intersection(sphere, ray, Interval(in.min, result.record.t));
+        if intersection.hit { result = intersection; }
     }
 
 
     for (var j: u32 = 0u; j < arrayLength(&grounds); j++) {
         let ground = grounds[j];
-        let intersection = ground_intersection(ground, ray, Interval(in.min, t_max));
-        
-        if intersection.hit {
-            result.hit = true;
-            result.record = intersection.record;
-            t_max = intersection.record.t;
-        }
+        let intersection = ground_intersection(ground, ray, Interval(in.min, result.record.t));
+      
+        if intersection.hit { result = intersection; }
+    }
+
+    for (var k: u32 = 0u; k < arrayLength(&triangles); k++) {
+        let triangle = triangles[k];
+
+        let intersection = triangle_intersection(triangle, ray, Interval(in.min, result.record.t));
+        if intersection.hit { result = intersection; }
     }
 
     return result;
@@ -141,8 +142,8 @@ fn ray_color(ray: Ray) -> vec3<f32> {
 
     let unit_direction = unit_vector(current_ray.dir);
     let a = 0.5 * (unit_direction.y + 1.0);
-    return vec3<f32>(0.01, 0.01, 0.01);
-    //return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * current_ray.color;
+    // return vec3<f32>(0.01, 0.01, 0.01);
+    return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * current_ray.color;
 }
 
 fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
@@ -176,7 +177,6 @@ struct Material {
 
 fn material_scatter(ray: Ray, hit_record: HitRecord) -> Ray {
     let reflected_direction = reflect(unit_vector(ray.dir), hit_record.normal);
-    // var diffuse_direction = hit_record.normal + random_unit_vec3();
 
     var scatter_direction: vec3<f32>;
 
@@ -187,7 +187,7 @@ fn material_scatter(ray: Ray, hit_record: HitRecord) -> Ray {
             scatter_direction = hit_record.normal + random_unit_vec3();
 
             // Avoid zero vector
-            if (vec3_near_zero(scatter_direction)) {
+            if vec3_near_zero(scatter_direction) {
                 scatter_direction = hit_record.normal;
             }
             break;
@@ -255,7 +255,7 @@ fn sphere_intersection(sphere: Sphere, ray: Ray, interval: Interval) -> Intersec
     let c = dot(oc, oc) - sphere.radius * sphere.radius;
     let discriminant = h * h - a * c;
 
-    if (discriminant < 0.0) {
+    if discriminant < 0.0 {
         result.hit = false;
         return result;
     }
@@ -264,9 +264,9 @@ fn sphere_intersection(sphere: Sphere, ray: Ray, interval: Interval) -> Intersec
 
     // Find the nearest root that lies in the acceptable range.
     var root = (-h - sqrtd) / a;
-    if (root <= interval.min || interval.max <= root) {
+    if root <= interval.min || interval.max <= root {
         root = (-h + sqrtd) / a;
-        if (root <= interval.min || interval.max <= root) {
+        if root <= interval.min || interval.max <= root {
             result.hit = false;
             return result;
         }
@@ -309,7 +309,7 @@ fn ground_intersection(ground: Ground, ray: Ray, interval: Interval) -> Intersec
     let intersected = interval_contains(Interval(-ground.width / 2.0, ground.width / 2.0), x) &&
                       interval_contains(Interval(-ground.height / 2.0, ground.height / 2.0), z);
 
-    if (t < interval.min || interval.max < t || !intersected) {
+    if t < interval.min || interval.max < t || !intersected {
         result.hit = false;
         return result;
     }
@@ -327,6 +327,76 @@ fn ground_intersection(ground: Ground, ray: Ray, interval: Interval) -> Intersec
 
     result.record = record;
     return result;
+}
+
+struct Triangle {
+    a: vec3<f32>,
+    b: vec3<f32>,
+    c: vec3<f32>,
+    material: MatPtr,
+}
+
+const EPSILON = 0.0000001;
+
+// Calculates the intersection between a triangle and a ray using the Möller–Trumbore algorithm:
+// https://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm#C++_implementation
+// This is a translation of the C++ code found on the Wikipedia page.
+fn triangle_intersection(tr: Triangle, ray: Ray, interval: Interval) -> IntersectionResult {
+    var result: IntersectionResult;
+
+    if vec3_near_zero(tr.a - tr.b) || vec3_near_zero(tr.a - tr.c) || vec3_near_zero(tr.b - tr.c) {
+        result.hit = false;
+        return result;
+    }
+
+    // Möller–Trumbore intersection algorithm
+    let edge1 = tr.b - tr.a;
+    let edge2 = tr.c - tr.a;
+    let h = cross(ray.dir, edge2);
+    let a = dot(edge1, h);
+
+    if a > -EPSILON && a < EPSILON {
+        // This ray is parallel to this triangle.
+        result.hit = false;
+        return result;
+    }
+
+    let f = 1.0 / a;
+    let s = ray.pos - tr.a;
+    let u = f * dot(s, h);
+
+    if u < 0.0 || u > 1.0 {
+        result.hit = false;
+        return result;
+    }
+
+    let q = cross(s, edge1);
+    let v = f * dot(ray.dir, q);
+
+    if v < 0.0 || u + v > 1.0 {
+        result.hit = false;
+        return result;
+    }
+
+    // At this stage we can compute t to find out where the intersection point is on the line.
+    let t = f * dot(edge2, q);
+
+    if t > EPSILON && interval_contains(interval, t) {
+        // Ray intersection
+        var record: HitRecord;
+        result.hit = true;
+        record.t = t;
+        record.point = ray_pos_at(t, ray);
+        let outward_normal = cross(edge1, edge2);
+        hit_record_set_face_normal(&record, ray, outward_normal);
+        record.material = tr.material;
+        result.record = record;
+        return result;
+    } else {
+        // This means that there is a line intersection but not a ray intersection.
+        result.hit = false;
+        return result;
+    }
 }
 
 // ------------------------------- Interval ------------------------------ //
@@ -397,7 +467,7 @@ fn random_vec3() -> vec3<f32> {
 fn random_vec3_in_unit_sphere() -> vec3<f32> {
     loop {
         let p = random_vec3() * 2.0 - vec3<f32>(1.0, 1.0, 1.0);
-        if (dot(p, p) >= 1.0) {
+        if dot(p, p) >= 1.0 {
             continue;
         }
         return p;
@@ -411,7 +481,7 @@ fn random_unit_vec3() -> vec3<f32> {
 
 fn random_vec3_on_hemisphere(normal: vec3<f32>) -> vec3<f32> {
     let on_unit_sphere = random_unit_vec3();
-    if (dot(on_unit_sphere, normal) > 0.0) {
+    if dot(on_unit_sphere, normal) > 0.0 {
         return on_unit_sphere;
     } else {
         return -on_unit_sphere;
