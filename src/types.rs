@@ -102,14 +102,14 @@ impl Camera {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Triangle {
-    a: [f32; 3],
+    pub a: [f32; 3],
     _padding: u32,
     pub b: [f32; 3],
     _padding_2: u32,
     pub c: [f32; 3],
-    _padding_3: u32,
+    // _padding_4: [u32; 2],
     pub material: u32,
-    _padding_4: [u32; 3],
+    
 }
 
 impl Triangle {
@@ -120,9 +120,7 @@ impl Triangle {
             b, 
             _padding_2: 0, 
             c, 
-            _padding_3: 0, 
             material, 
-            _padding_4: [0; 3],
         }
     }
 }

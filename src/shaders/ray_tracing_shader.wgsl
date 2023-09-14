@@ -1,7 +1,7 @@
 // ---------------------- Constants ---------------------- //
 
-const SAMPLE_COUNT: u32 = 800u;
-const BOUNCE_COUNT: u32 = 10u;
+const SAMPLE_COUNT: u32 = 10u;
+const BOUNCE_COUNT: u32 = 5u;
 const PI: f32 = 3.1415926535897932385;
 
 // ---------------------- Bindings ------------------------ //
@@ -142,8 +142,8 @@ fn ray_color(ray: Ray) -> vec3<f32> {
 
     let unit_direction = unit_vector(current_ray.dir);
     let a = 0.5 * (unit_direction.y + 1.0);
-    // return vec3<f32>(0.01, 0.01, 0.01);
-    return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * current_ray.color;
+    return vec3<f32>(0.01, 0.01, 0.01);
+    // return ((1.0 - a) * vec3<f32>(1.0, 1.0, 1.0) + a * vec3<f32>(0.5, 0.7, 1.0)) * current_ray.color;
 }
 
 fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {

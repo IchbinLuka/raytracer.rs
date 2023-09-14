@@ -2,6 +2,7 @@
 
 use core::slice::SlicePattern;
 
+use collada::{Triangles, PrimitiveElement};
 use wgpu::{Device, util::DeviceExt};
 use winit::dpi::PhysicalSize;
 mod types;
@@ -94,81 +95,6 @@ impl State {
             },
             None, // Trace path
         ).await.unwrap();
-
-
-        // let surface_caps = surface.get_capabilities(&adapter);
-        // Shader code in this tutorial assumes an sRGB surface texture. Using a different
-        // one will result all the colors coming out darker. If you want to support non
-        // sRGB surfaces, you'll need to account for that when drawing to the frame.
-        /* let surface_format = surface_caps.formats.iter()
-            .copied()
-            .find(|f| f.is_srgb())            
-            .unwrap_or(surface_caps.formats[0]);
-
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode: surface_caps.present_modes[0],
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-        };
-        surface.configure(&device, &config);
-
-
-        let render_shader = device.create_shader_module(wgpu::include_wgsl!("shaders/render_shader.wgsl"));
-        
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[],
-                push_constant_ranges: &[],
-            });
-
-        let targets = [Some(wgpu::ColorTargetState { // 4.
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            blend: Some(wgpu::BlendState::REPLACE),
-            write_mask: wgpu::ColorWrites::ALL,
-        })];
-
-        let pipeline_descriptor = wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &render_shader,
-                entry_point: "vertex_main", // 1.
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState { // 3.
-                module: &render_shader,
-                entry_point: "fragment_main",
-                targets: &targets,
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw, // 2.
-                cull_mode: Some(wgpu::Face::Back),
-                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
-                polygon_mode: wgpu::PolygonMode::Fill,
-                // Requires Features::DEPTH_CLIP_CONTROL
-                unclipped_depth: false,
-                // Requires Features::CONSERVATIVE_RASTERIZATION
-                conservative: false,
-            },
-            depth_stencil: None, // 1.
-            multisample: wgpu::MultisampleState {
-                count: 1, // 2.
-                mask: !0, // 3.
-                alpha_to_coverage_enabled: false, // 4.
-            },
-            multiview: None, // 5.
-        };
-
-        let render_pipeline = device.create_render_pipeline(&pipeline_descriptor);
-        */
-        // let swap_chain = device.create_(&surface, &swap_chain_desc);
 
 
         // Create a buffer to hold the results
@@ -460,66 +386,12 @@ impl State {
             output_image.save("output.png").unwrap();
         }
 
-
-        // println!("data: {:?}", pixels);
-
-        /*self.queue.write_texture(
-            ImageCopyTexture {
-                texture: &self.output_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            }, 
-            data, 
-            ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * size.width),
-                rows_per_image: Some(size.height),
-            }, 
-            Extent3d {
-                width: size.width,
-                height: size.height,
-                depth_or_array_layers: 1,
-            }
-        );*/
-
-        return;
-
-        // TODO: Render the output texture to the screen
-        /*let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Render Encoder"),
-        });
-        
-        {
-            // let view = self.output_texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let view = self.surface.get_current_texture().unwrap().texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: None,
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), // Clear the screen to white
-                        store: true,
-                    },
-                })],
-                depth_stencil_attachment: None,
-            });
-        
-            // Bind the texture to a shader
-            render_pass.set_bind_group(0, &self.bind_group, &[]);
-        
-            // Draw a quad or a full-screen triangle using the texture
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.draw(0..3, 0..1); // Adjust the vertices and indices as needed
-        }
-        
-        // Submit the render commands
-        self.queue.submit(Some(encoder.finish()));*/
-
     }
 
+}
+
+fn vertex_to_slice(vertex: &collada::Vertex) -> [f32; 3] {
+    [vertex.x as f32, vertex.y as f32, vertex.z as f32]
 }
 
 #[cfg_attr(target_arch="wasm32", wasm_bindgen(start))]
@@ -533,11 +405,29 @@ pub async fn run() {
         }
     }
 
-    // let event_loop = EventLoop::new();
-    /*let window = WindowBuilder::new()
-        .build(&event_loop)
-        .unwrap();
-    */
+    let suzanne = collada::document::ColladaDocument::from_str(include_str!("assets/suzanne.dae")).unwrap();
+
+    let objects = suzanne.get_obj_set().unwrap().objects;
+
+    let mut triangle_vec: Vec<Triangle> = Vec::new();
+
+    for object in objects {
+        for e in object.geometry.iter().flat_map(|e| &e.mesh) {
+            if let PrimitiveElement::Triangles(triangles) = e {
+                for (a, b, c) in &triangles.vertices {
+                    triangle_vec.push(
+                        Triangle::new(
+                            vertex_to_slice(&object.vertices[*a]), 
+                            vertex_to_slice(&object.vertices[*b]), 
+                            vertex_to_slice(&object.vertices[*c]), 
+                            1u32
+                        )
+                    );
+                }
+            }
+        }
+    }
+
     let materials = &[
         Material::new(METAL, 0.7, [0.8, 0.5, 0.25]), 
         Material::new(METAL, 0.2, [0.7, 0.7, 0.7]), 
@@ -548,21 +438,19 @@ pub async fn run() {
 
     let spheres = &[
         // Sphere::new([0.5, 0.0, -1.7], 0.4, 1), 
-        Sphere::new([0.0, -0.2, -1.0], 0.2, 2),
+        Sphere::new([0.0, -1.8, -1.0], 0.2, 2),
         // Sphere::new([-0.5, 0.0, -1.7], 0.4, 3),
-        // Sphere::new([0.0, -0.2, -2.4], 0.2, 4),
+        Sphere::new([0.0, -0.8, -1.0], 0.2, 4),
     ];
 
     let grounds = &[
-        Ground::new([0.0, -0.4, 0.0], 100.0, 100.0, 0),
+        Ground::new([0.0, -2.0, 0.0], 100.0, 100.0, 0),
     ];
 
-    let triangles = &[
-        Triangle::new([1.0, 0.2, 0.0], [0.0, 0.2, 1.0], [1.0, 0.2, 1.0], 1),
-    ];
+    let triangles = triangle_vec.as_slice();
 
     let camera = Camera::new(
-        [-4.0, 4.0, 2.0], 
+        [0.0, 0.5, -5.0], 
         [0.0, 0.0, -1.5], 
         [0.0, 1.0, 0.0], 
         [IMAGE_SIZE.width, IMAGE_SIZE.height], 
@@ -571,19 +459,4 @@ pub async fn run() {
 
     let mut state = State::new(spheres, grounds, triangles, materials, camera).await;
     state.render();
-    
-    /*event_loop.run(move |event, _, control_flow| {
-        match event {
-            Event::WindowEvent { event, .. } => match event {
-                winit::event::WindowEvent::CloseRequested => {
-                    *control_flow = winit::event_loop::ControlFlow::Exit;
-                }
-                _ => {}
-            },
-            Event::RedrawRequested(_) => {
-                state.render();
-            }
-            _ => {}
-        }
-    })*/
 }
