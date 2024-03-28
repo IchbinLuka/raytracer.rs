@@ -1,4 +1,3 @@
 /target
-./output.png
+pictures/output.png
 .idea
-*.png
